@@ -366,10 +366,21 @@ def health():
 
 
 # ---------------------------------------------------------------- catch-up loop
-def catch_up_loop():
+_loop_gen = {"n": 0}
+_beat = {"t": time.time()}
+_start_lock = threading.Lock()
+_started = {"done": False}
+
+
+def _heartbeat() -> None:
+    _beat["t"] = time.time()
+
+
+def catch_up_loop(gen):
     webhook_ok = False
     status["stage"] = "catch-up thread started"
-    while True:
+    while gen == _loop_gen["n"]:
+        _heartbeat()
         if not webhook_ok:
             try:
                 status["stage"] = "registering webhook"
@@ -385,17 +396,49 @@ def catch_up_loop():
             status["last_catch_up_found"] = len(orders)
             log.info("Catch-up pass: %d unfulfilled order(s) found", len(orders))
             for order in orders:
+                _heartbeat()
                 process_order(order)
         except Exception as e:
             status["last_catch_up_at"] = _now()
             status["last_error"] = f"{_now()} catch-up: {type(e).__name__}: {str(e)[:150]}"
             log.exception("Catch-up pass failed")
         status["stage"] = "sleeping until next pass"
-        time.sleep(CATCH_UP_INTERVAL_SECONDS)
+        for _ in range(max(1, CATCH_UP_INTERVAL_SECONDS // 15)):
+            if gen != _loop_gen["n"]:
+                return
+            _heartbeat()
+            time.sleep(15)
 
 
-threading.Thread(target=catch_up_loop, daemon=True).start()
+def start_catch_up_thread() -> None:
+    _loop_gen["n"] += 1  # retires any older (possibly stuck) loop thread
+    _heartbeat()
+    threading.Thread(target=catch_up_loop, args=(_loop_gen["n"],), daemon=True).start()
+
+
+def watchdog() -> None:
+    """Restart the catch-up loop if it stops making progress (e.g. a hung network call)."""
+    while True:
+        time.sleep(30)
+        if time.time() - _beat["t"] > 150:
+            status["watchdog_restarts"] = status.get("watchdog_restarts", 0) + 1
+            status["last_error"] = f"{_now()} watchdog: loop stalled at '{status['stage']}', restarted"
+            log.warning("Catch-up loop stalled at '%s' - restarting it", status["stage"])
+            start_catch_up_thread()
+
+
+@app.before_request
+def _start_background_work_once():
+    # Started on the first request, after the app is fully loaded - not at import time.
+    if not _started["done"]:
+        with _start_lock:
+            if not _started["done"]:
+                _started["done"] = True
+                start_catch_up_thread()
+                threading.Thread(target=watchdog, daemon=True).start()
+
 
 if __name__ == "__main__":
+    _start_background_work_once()
     port = int(os.environ.get("PORT", "5000"))
     app.run(host="0.0.0.0", port=port)
