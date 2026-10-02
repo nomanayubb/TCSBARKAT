@@ -125,6 +125,29 @@ def ensure_webhook_registered() -> None:
     resp.raise_for_status()
     log.info("Registered orders/create webhook at %s", address)
 
+# Counters only (no order or customer data) so /status is safe to expose.
+status = {
+    "commit": os.environ.get("RENDER_GIT_COMMIT", "")[:7],
+    "started_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    "webhooks_received": 0,
+    "webhooks_rejected_bad_hmac": 0,
+    "last_webhook_at": None,
+    "last_catch_up_at": None,
+    "last_catch_up_found": None,
+    "last_error": None,
+    "orders_booked_simulated_dry_run": 0,
+    "orders_fulfilled": 0,
+    "order_failures": 0,
+    "last_order_customer_fields_present": None,
+    "dry_run": not ALLOW_SIMULATED_FULFILLMENT,
+    "tcs_connected": bool(TCS_API_URL),
+}
+
+
+def _now() -> str:
+    return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
+
+
 _lock = threading.Lock()  # guards processed-orders file from concurrent webhook + catch-up writes
 
 
@@ -280,6 +303,10 @@ def process_order(order: dict) -> None:
         return
 
     log.info("Processing new order %s (%s)", order_id, order.get("name"))
+    shipping = order.get("shipping_address") or {}
+    status["last_order_customer_fields_present"] = bool(
+        shipping.get("first_name") and shipping.get("address1") and shipping.get("phone")
+    )
     try:
         booking = book_tcs_shipment(order)
         if booking.get("simulated") and not ALLOW_SIMULATED_FULFILLMENT:
@@ -289,11 +316,15 @@ def process_order(order: dict) -> None:
                 "DRY RUN: order %s (%s) NOT fulfilled in Shopify - TCS is not connected yet",
                 order_id, order.get("name"),
             )
+            status["orders_booked_simulated_dry_run"] += 1
             mark_processed(order_id)
             return
         mark_order_fulfilled(order_id, booking["tracking_number"], booking.get("tracking_url", ""))
+        status["orders_fulfilled"] += 1
         mark_processed(order_id)
-    except Exception:
+    except Exception as e:
+        status["order_failures"] += 1
+        status["last_error"] = f"{_now()} order failure: {type(e).__name__}"
         log.exception("Failed to process order %s - will retry on next catch-up pass", order_id)
         # deliberately NOT marked processed, so the catch-up loop retries it
 
@@ -304,9 +335,13 @@ def orders_create_webhook():
     raw_body = request.get_data()
     hmac_header = request.headers.get("X-Shopify-Hmac-Sha256", "")
     if not verify_shopify_webhook(raw_body, hmac_header):
+        status["webhooks_rejected_bad_hmac"] += 1
+        status["last_webhook_at"] = _now()
         log.warning("Rejected webhook with invalid HMAC signature")
         abort(401)
 
+    status["webhooks_received"] += 1
+    status["last_webhook_at"] = _now()
     order = json.loads(raw_body)
     # Respond fast; Shopify expects a quick 200 or it treats it as a failed
     # delivery and queues a retry even though we did receive it.
@@ -317,6 +352,11 @@ def orders_create_webhook():
 @app.route("/", methods=["GET"])
 def home():
     return "TCS auto-fulfillment service is running.", 200
+
+
+@app.route("/status", methods=["GET"])
+def status_page():
+    return dict(status, now=_now()), 200
 
 
 @app.route("/health", methods=["GET"])
@@ -336,10 +376,14 @@ def catch_up_loop():
                 log.exception("Webhook registration failed - will retry next pass")
         try:
             orders = fetch_unfulfilled_orders()
+            status["last_catch_up_at"] = _now()
+            status["last_catch_up_found"] = len(orders)
             log.info("Catch-up pass: %d unfulfilled order(s) found", len(orders))
             for order in orders:
                 process_order(order)
-        except Exception:
+        except Exception as e:
+            status["last_catch_up_at"] = _now()
+            status["last_error"] = f"{_now()} catch-up: {type(e).__name__}: {str(e)[:150]}"
             log.exception("Catch-up pass failed")
         time.sleep(CATCH_UP_INTERVAL_SECONDS)
 
