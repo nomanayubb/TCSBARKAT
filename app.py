@@ -37,7 +37,11 @@ log = logging.getLogger("tcs-fulfillment")
 app = Flask(__name__)
 
 # ---------------------------------------------------------------- config
-SHOPIFY_STORE_DOMAIN = os.environ["SHOPIFY_STORE_DOMAIN"]          # e.g. yourstore.myshopify.com
+# e.g. yourstore.myshopify.com - tolerate a pasted URL (scheme / trailing slash)
+SHOPIFY_STORE_DOMAIN = (
+    os.environ["SHOPIFY_STORE_DOMAIN"].strip()
+    .removeprefix("https://").removeprefix("http://").strip("/")
+)
 # Dev Dashboard apps: client id/secret are exchanged for a 24h access token.
 SHOPIFY_CLIENT_ID = os.environ.get("SHOPIFY_CLIENT_ID", "")
 SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
