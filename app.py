@@ -20,6 +20,7 @@ marking fulfilled) can be fully tested end-to-end right now.
 """
 import hashlib
 import hmac
+import html
 import base64
 import json
 import logging
@@ -57,6 +58,9 @@ APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 TCS_API_USER = os.environ.get("TCS_API_USER", "")
 TCS_API_KEY = os.environ.get("TCS_API_KEY", "")
 TCS_API_URL = os.environ.get("TCS_API_URL", "")  # set once TCS gives you their endpoint
+
+# Password for the /orders page (it shows customer details). Page is disabled if unset.
+ORDERS_PAGE_KEY = os.environ.get("ORDERS_PAGE_KEY", "")
 
 # Off by default: simulated TCS bookings are logged but never fulfil real orders.
 # Set to "true" only to test the full pipeline on a test order (and use your own email).
@@ -368,6 +372,67 @@ def orders_create_webhook():
 @app.route("/", methods=["GET"])
 def home():
     return "TCS auto-fulfillment service is running.", 200
+
+
+@app.route("/orders", methods=["GET"])
+def orders_page():
+    """Readable list of the latest Shopify orders. Contains customer details,
+    so it is locked behind ORDERS_PAGE_KEY (open /orders?key=YOUR_KEY)."""
+    if not ORDERS_PAGE_KEY:
+        return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
+    if not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+
+    try:
+        resp = requests.get(
+            f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
+            params={"status": "any", "limit": 50}, timeout=(10, 30),
+        )
+        resp.raise_for_status()
+        orders = resp.json().get("orders", [])
+    except Exception as e:
+        return f"Could not load orders from Shopify: {type(e).__name__}", 502
+
+    esc = html.escape
+    rows = []
+    for o in orders:
+        ship = o.get("shipping_address") or {}
+        name = f"{ship.get('first_name') or ''} {ship.get('last_name') or ''}".strip()
+        address = ", ".join(p for p in [
+            ship.get("address1"), ship.get("address2"), ship.get("city"),
+            ship.get("province"), ship.get("zip"), ship.get("country"),
+        ] if p)
+        items = "<br>".join(
+            f"{esc(str(li.get('title', '')))} &times; {li.get('quantity', 1)}"
+            for li in o.get("line_items", [])
+        )
+        rows.append(
+            "<tr>"
+            f"<td><b>{esc(str(o.get('name', '')))}</b></td>"
+            f"<td>{esc(str(o.get('created_at', ''))[:16].replace('T', ' '))}</td>"
+            f"<td>{esc(name)}</td>"
+            f"<td>{esc(ship.get('phone') or o.get('phone') or '')}</td>"
+            f"<td>{esc(address)}</td>"
+            f"<td>{items}</td>"
+            f"<td>{esc(str(o.get('total_price', '')))} {esc(str(o.get('currency', '')))}</td>"
+            f"<td>{esc(str(o.get('financial_status', '')))}</td>"
+            f"<td>{esc(str(o.get('fulfillment_status') or 'unfulfilled'))}</td>"
+            "</tr>"
+        )
+    page = (
+        "<!doctype html><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Orders</title>"
+        "<style>body{font-family:Arial,sans-serif;margin:16px}"
+        "table{border-collapse:collapse;width:100%}"
+        "th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;font-size:14px}"
+        "th{background:#f0f0f0}.w{overflow-x:auto}</style>"
+        f"<h2>Latest {len(orders)} Shopify orders</h2>"
+        "<div class='w'><table><tr><th>Order</th><th>Placed (UTC)</th><th>Customer</th>"
+        "<th>Phone</th><th>Address</th><th>Items</th><th>Total</th><th>Payment</th>"
+        "<th>Fulfilment</th></tr>" + "".join(rows) + "</table></div>"
+    )
+    return page, 200
 
 
 @app.route("/status", methods=["GET"])
