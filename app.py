@@ -297,6 +297,11 @@ def orders_create_webhook():
     return "", 200
 
 
+@app.route("/", methods=["GET"])
+def home():
+    return "TCS auto-fulfillment service is running.", 200
+
+
 @app.route("/health", methods=["GET"])
 def health():
     return {"status": "ok"}, 200
