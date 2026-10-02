@@ -149,6 +149,18 @@ def _now() -> str:
     return time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime())
 
 
+status["recent_orders"] = []  # newest first: order number + outcome only, no customer data
+
+
+def _record(order: dict, outcome: str) -> None:
+    status["recent_orders"].insert(0, {
+        "order": order.get("name") or str(order.get("id")),
+        "at": _now(),
+        "outcome": outcome,
+    })
+    del status["recent_orders"][15:]
+
+
 _lock = threading.Lock()  # guards processed-orders file from concurrent webhook + catch-up writes
 
 
@@ -318,13 +330,16 @@ def process_order(order: dict) -> None:
                 order_id, order.get("name"),
             )
             status["orders_booked_simulated_dry_run"] += 1
+            _record(order, "dry run: simulated TCS booking, NOT fulfilled in Shopify")
             mark_processed(order_id)
             return
         mark_order_fulfilled(order_id, booking["tracking_number"], booking.get("tracking_url", ""))
         status["orders_fulfilled"] += 1
+        _record(order, f"fulfilled, tracking {booking['tracking_number']}")
         mark_processed(order_id)
     except Exception as e:
         status["order_failures"] += 1
+        _record(order, f"FAILED: {type(e).__name__} (will retry)")
         status["last_error"] = f"{_now()} order failure: {type(e).__name__}"
         log.exception("Failed to process order %s - will retry on next catch-up pass", order_id)
         # deliberately NOT marked processed, so the catch-up loop retries it
