@@ -86,7 +86,7 @@ def get_access_token() -> str:
                 "client_id": SHOPIFY_CLIENT_ID,
                 "client_secret": SHOPIFY_CLIENT_SECRET,
             },
-            timeout=30,
+            timeout=(10, 30),
         )
         resp.raise_for_status()
         data = resp.json()
@@ -111,7 +111,7 @@ def ensure_webhook_registered() -> None:
     address = f"{APP_BASE_URL}/webhooks/orders-create"
     existing = requests.get(
         f"{SHOPIFY_BASE}/webhooks.json", headers=shopify_headers(),
-        params={"topic": "orders/create"}, timeout=30,
+        params={"topic": "orders/create"}, timeout=(10, 30),
     )
     existing.raise_for_status()
     if any(w.get("address") == address for w in existing.json().get("webhooks", [])):
@@ -120,7 +120,7 @@ def ensure_webhook_registered() -> None:
     resp = requests.post(
         f"{SHOPIFY_BASE}/webhooks.json", headers=shopify_headers(),
         json={"webhook": {"topic": "orders/create", "address": address, "format": "json"}},
-        timeout=30,
+        timeout=(10, 30),
     )
     resp.raise_for_status()
     log.info("Registered orders/create webhook at %s", address)
@@ -129,6 +129,7 @@ def ensure_webhook_registered() -> None:
 status = {
     "commit": os.environ.get("RENDER_GIT_COMMIT", "")[:7],
     "started_at": time.strftime("%Y-%m-%d %H:%M:%S UTC", time.gmtime()),
+    "stage": "catch-up thread not started yet",
     "webhooks_received": 0,
     "webhooks_rejected_bad_hmac": 0,
     "last_webhook_at": None,
@@ -200,7 +201,7 @@ def fetch_unfulfilled_orders(days_back: int = 3) -> list:
             "created_at_min": since,
             "limit": 250,
         },
-        timeout=30,
+        timeout=(10, 30),
     )
     resp.raise_for_status()
     return resp.json().get("orders", [])
@@ -210,7 +211,7 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
     # Shopify's fulfillment API needs the fulfillment order id, not the order id directly.
     fo_resp = requests.get(
         f"{SHOPIFY_BASE}/orders/{order_id}/fulfillment_orders.json",
-        headers=shopify_headers(), timeout=30,
+        headers=shopify_headers(), timeout=(10, 30),
     )
     fo_resp.raise_for_status()
     fulfillment_orders = fo_resp.json().get("fulfillment_orders", [])
@@ -233,7 +234,7 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
     }
     resp = requests.post(
         f"{SHOPIFY_BASE}/fulfillments.json",
-        headers=shopify_headers(), json=payload, timeout=30,
+        headers=shopify_headers(), json=payload, timeout=(10, 30),
     )
     resp.raise_for_status()
     log.info("Order %s marked fulfilled in Shopify (tracking %s)", order_id, tracking_number)
@@ -284,7 +285,7 @@ def book_tcs_shipment(order: dict) -> dict:
         TCS_API_URL,
         auth=(TCS_API_USER, TCS_API_KEY),
         json=payload,
-        timeout=30,
+        timeout=(10, 30),
     )
     resp.raise_for_status()
     data = resp.json()
@@ -367,14 +368,18 @@ def health():
 # ---------------------------------------------------------------- catch-up loop
 def catch_up_loop():
     webhook_ok = False
+    status["stage"] = "catch-up thread started"
     while True:
         if not webhook_ok:
             try:
+                status["stage"] = "registering webhook"
                 ensure_webhook_registered()
                 webhook_ok = True
-            except Exception:
+            except Exception as e:
+                status["last_error"] = f"{_now()} webhook registration: {type(e).__name__}: {str(e)[:150]}"
                 log.exception("Webhook registration failed - will retry next pass")
         try:
+            status["stage"] = "fetching orders"
             orders = fetch_unfulfilled_orders()
             status["last_catch_up_at"] = _now()
             status["last_catch_up_found"] = len(orders)
@@ -385,6 +390,7 @@ def catch_up_loop():
             status["last_catch_up_at"] = _now()
             status["last_error"] = f"{_now()} catch-up: {type(e).__name__}: {str(e)[:150]}"
             log.exception("Catch-up pass failed")
+        status["stage"] = "sleeping until next pass"
         time.sleep(CATCH_UP_INTERVAL_SECONDS)
 
 
