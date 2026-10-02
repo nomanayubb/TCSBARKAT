@@ -25,6 +25,7 @@ import base64
 import json
 import logging
 import os
+import re
 import threading
 import time
 from datetime import datetime, timedelta, timezone
@@ -56,9 +57,28 @@ SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-07")
 # When set, the orders/create webhook is registered automatically on startup.
 APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 
-TCS_API_USER = os.environ.get("TCS_API_USER", "")
-TCS_API_KEY = os.environ.get("TCS_API_KEY", "")
-TCS_API_URL = os.environ.get("TCS_API_URL", "")  # set once TCS gives you their endpoint
+# TCS COD API (see COD-API-UserManual.pdf). Sandbox unless TCS_ENV=production.
+TCS_ENV = os.environ.get("TCS_ENV", "sandbox").strip().lower()
+TCS_CLIENT_ID = os.environ.get("TCS_CLIENT_ID", "")
+TCS_CLIENT_SECRET = os.environ.get("TCS_CLIENT_SECRET", "")
+TCS_USERNAME = os.environ.get("TCS_USERNAME", "")
+TCS_PASSWORD = os.environ.get("TCS_PASSWORD", "")
+TCS_ACCOUNT_NO = os.environ.get("TCS_ACCOUNT_NO", "")
+TCS_COST_CENTER_CODE = os.environ.get("TCS_COST_CENTER_CODE", "")
+TCS_SERVICE_CODE = os.environ.get("TCS_SERVICE_CODE", "O")
+TCS_SHIPPER_NAME = os.environ.get("TCS_SHIPPER_NAME", "")
+TCS_SHIPPER_ADDRESS = os.environ.get("TCS_SHIPPER_ADDRESS", "")
+TCS_SHIPPER_CITY = os.environ.get("TCS_SHIPPER_CITY", "")
+TCS_SHIPPER_CITY_CODE = os.environ.get("TCS_SHIPPER_CITY_CODE", "")
+TCS_SHIPPER_ZIP = os.environ.get("TCS_SHIPPER_ZIP", "")
+TCS_SHIPPER_MOBILE = os.environ.get("TCS_SHIPPER_MOBILE", "")
+# TCS marks middlename as mandatory; Shopify has none, so a placeholder is sent.
+TCS_CONSIGNEE_MIDDLENAME = os.environ.get("TCS_CONSIGNEE_MIDDLENAME", "N/A")
+TCS_CONFIGURED = all([
+    TCS_CLIENT_ID, TCS_CLIENT_SECRET, TCS_USERNAME, TCS_PASSWORD, TCS_ACCOUNT_NO,
+    TCS_COST_CENTER_CODE, TCS_SHIPPER_NAME, TCS_SHIPPER_ADDRESS, TCS_SHIPPER_CITY,
+    TCS_SHIPPER_MOBILE,
+])
 
 # Password for the /orders page (it shows customer details). Page is disabled if unset.
 ORDERS_PAGE_KEY = os.environ.get("ORDERS_PAGE_KEY", "")
@@ -146,7 +166,8 @@ status = {
     "order_failures": 0,
     "last_order_customer_fields_present": None,
     "dry_run": not ALLOW_SIMULATED_FULFILLMENT,
-    "tcs_connected": bool(TCS_API_URL),
+    "tcs_connected": TCS_CONFIGURED,
+    "tcs_env": TCS_ENV,
 }
 
 
@@ -257,57 +278,194 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
     log.info("Order %s marked fulfilled in Shopify (tracking %s)", order_id, tracking_number)
 
 
-# ---------------------------------------------------------------- TCS booking (STUB)
+# ---------------------------------------------------------------- TCS booking
+# Implements TCS's "COD API User Guide v1.0": Authorization -> E-COM Authentication
+# -> Booking Create. Sandbox (devconnect) is the default; production (ociconnect)
+# only when TCS_ENV=production.
+def _tcs_base() -> str:
+    return ("https://ociconnect.tcscourier.com" if TCS_ENV == "production"
+            else "https://devconnect.tcscourier.com")
+
+
+_tcs_tokens = {"bearer": "", "bearer_exp": 0.0, "ecom": "", "ecom_exp": 0.0}
+_tcs_lock = threading.Lock()
+
+
+def _expiry_ts(value, fallback_seconds=3000) -> float:
+    try:
+        return datetime.fromisoformat(str(value).replace("Z", "+00:00")).timestamp()
+    except Exception:
+        return time.time() + fallback_seconds
+
+
+def _tcs_get_tokens() -> tuple:
+    """Returns (bearer_token, ecom_access_token), refreshing either when near expiry."""
+    with _tcs_lock:
+        now = time.time()
+        if not (_tcs_tokens["bearer"] and now < _tcs_tokens["bearer_exp"] - 300):
+            r = requests.get(
+                f"{_tcs_base()}/auth/api/auth",
+                json={"clientid": TCS_CLIENT_ID, "clientsecret": TCS_CLIENT_SECRET},
+                timeout=(10, 30),
+            )
+            r.raise_for_status()
+            res = (r.json() or {}).get("result") or {}
+            if not res.get("accessToken"):
+                raise RuntimeError("TCS authorization returned no token (check client id/secret)")
+            _tcs_tokens["bearer"] = res["accessToken"]
+            _tcs_tokens["bearer_exp"] = _expiry_ts(res.get("expiry"))
+            log.info("Fetched a TCS bearer token (%s)", TCS_ENV)
+        if not (_tcs_tokens["ecom"] and now < _tcs_tokens["ecom_exp"] - 300):
+            r = requests.get(
+                f"{_tcs_base()}/ecom/api/authentication/token",
+                headers={"Authorization": f"Bearer {_tcs_tokens['bearer']}"},
+                json={"username": TCS_USERNAME, "password": TCS_PASSWORD},
+                timeout=(10, 30),
+            )
+            r.raise_for_status()
+            data = r.json() or {}
+            if not data.get("accesstoken"):
+                raise RuntimeError("TCS e-com authentication returned no token (check username/password)")
+            _tcs_tokens["ecom"] = data["accesstoken"]
+            _tcs_tokens["ecom_exp"] = _expiry_ts(data.get("expiry"))
+            log.info("Fetched a TCS e-com access token (%s)", TCS_ENV)
+        return _tcs_tokens["bearer"], _tcs_tokens["ecom"]
+
+
+def _pk_mobile(raw) -> str:
+    """Normalise to TCS's required 11-digit 03xxxxxxxxx format."""
+    digits = re.sub(r"\D", "", str(raw or ""))
+    if digits.startswith("0092"):
+        digits = digits[4:]
+    elif digits.startswith("92") and len(digits) == 12:
+        digits = digits[2:]
+    if len(digits) == 10 and digits.startswith("3"):
+        digits = "0" + digits
+    if not (len(digits) == 11 and digits.startswith("03")):
+        raise ValueError("customer phone number is not a valid Pakistani mobile (needs 03xxxxxxxxx)")
+    return digits
+
+
+def _pad3(text: str) -> str:
+    text = (text or "").strip()
+    return text if len(text) >= 3 else text.ljust(3, ".")
+
+
+def _build_tcs_payload(order: dict, ecom_token: str) -> dict:
+    ship = order.get("shipping_address") or order.get("billing_address") or {}
+    first = (ship.get("first_name") or "").strip()
+    last = (ship.get("last_name") or "").strip()
+    if len(first) < 3:
+        first = f"{first} {last}".strip()
+        last = ""
+    lines = order.get("line_items", []) or []
+    grams = sum((li.get("grams") or 0) * (li.get("quantity") or 1) for li in lines)
+    weight = max(0.5, round(grams / 1000, 2))
+    pieces = max(1, sum((li.get("quantity") or 1) for li in lines))
+
+    paid = order.get("financial_status") == "paid"
+    cod = 0 if paid else int(round(float(order.get("total_price") or 0)))
+    if cod > 250000:
+        raise ValueError("COD amount exceeds TCS limit of 250000")
+
+    skus = []
+    for li in lines:
+        skus.append({
+            "description": _pad3(str(li.get("title") or "Item"))[:50],
+            "quantity": max(1, li.get("quantity") or 1),
+            "weight": max(0.5, round((li.get("grams") or 0) / 1000, 2)),
+            "uom": "KG",
+            "unitprice": min(250000, max(1, int(round(float(li.get("price") or 1))))),
+            "declaredvalue": None,
+            "insuredvalue": None,
+        })
+    content = _pad3(", ".join(str(li.get("title") or "") for li in lines))[:50]
+
+    addr1 = _pad3(str(ship.get("address1") or ""))[:120]
+    consignee = {
+        "firstname": _pad3(first)[:50],
+        "middlename": TCS_CONSIGNEE_MIDDLENAME,
+        "address1": addr1,
+        "countrycode": "PK",
+        "countryname": "Pakistan",
+        "cityname": _pad3(str(ship.get("city") or ""))[:50],
+        "mobile": _pk_mobile(ship.get("phone") or order.get("phone")),
+    }
+    if len(last) >= 3:
+        consignee["lastname"] = last[:50]
+    if ship.get("address2"):
+        consignee["address2"] = _pad3(str(ship["address2"]))[:120]
+    if ship.get("zip"):
+        consignee["zip"] = str(ship["zip"])[:6]
+    if order.get("email"):
+        consignee["email"] = str(order["email"])[:50]
+
+    pkt = timezone(timedelta(hours=5))
+    return {
+        "accesstoken": ecom_token,
+        "shipperinfo": {
+            "tcsaccount": TCS_ACCOUNT_NO,
+            "shippername": TCS_SHIPPER_NAME,
+            "address1": TCS_SHIPPER_ADDRESS,
+            "zip": TCS_SHIPPER_ZIP,
+            "countrycode": "PK",
+            "countryname": "Pakistan",
+            "citycode": TCS_SHIPPER_CITY_CODE,
+            "cityname": TCS_SHIPPER_CITY,
+            "mobile": TCS_SHIPPER_MOBILE,
+        },
+        "consigneeinfo": consignee,
+        "shipmentinfo": {
+            "costcentercode": TCS_COST_CENTER_CODE,
+            "referenceno": str(order.get("name") or order.get("id"))[:50],
+            "contentdesc": content,
+            "servicecode": TCS_SERVICE_CODE,
+            "shipmentdate": datetime.now(pkt).strftime("%d/%m/%Y %H:%M:%S"),
+            "currency": "PKR",
+            "codamount": cod,
+            "weightinkg": weight,
+            "pieces": pieces,
+            "fragile": False,
+            "remarks": f"Shopify order {order.get('name')}",
+            "skus": skus,
+        },
+    }
+
+
 def book_tcs_shipment(order: dict) -> dict:
-    """
-    Books a TCS shipment for one Shopify order and returns
-    {"tracking_number": ..., "tracking_url": ...}.
-
-    STUB: replace the body of this function with the real TCS API call once
-    credentials/docs are available. Shape below follows TCS's typical
-    consignment-booking fields (consignee name/address/phone, COD amount,
-    pieces, weight) - adjust field names to match their actual API once you
-    have the docs; the rest of the pipeline doesn't care how this function
-    gets its result.
-    """
-    shipping = order.get("shipping_address") or {}
-    consignee_name = f"{shipping.get('first_name','')} {shipping.get('last_name','')}".strip()
-    cod_amount = order.get("total_price") if order.get("financial_status") != "paid" else "0"
-
-    if not TCS_API_URL:
-        # No real endpoint configured yet - log what WOULD be sent and return a
-        # fake tracking number so the rest of the flow (marking fulfilled,
-        # dedup) can be exercised end-to-end before TCS access exists.
+    """Books a TCS shipment for one Shopify order -> {"tracking_number", "tracking_url", ...}.
+    Without full TCS settings it only simulates (logged, never touches Shopify)."""
+    if not TCS_CONFIGURED:
         fake_tracking = f"FAKE-{order['id']}"
-        log.warning(
-            "TCS_API_URL not set - SIMULATING booking for order %s: consignee=%s, "
-            "address=%s, phone=%s, COD=%s, pieces=%s -> fake tracking %s",
-            order["id"], consignee_name, shipping.get("address1"), shipping.get("phone"),
-            cod_amount, len(order.get("line_items", [])), fake_tracking,
-        )
+        log.warning("TCS settings incomplete - SIMULATING booking for order %s", order["id"])
         return {"tracking_number": fake_tracking, "tracking_url": "", "simulated": True}
 
-    payload = {
-        "consignee_name": consignee_name,
-        "consignee_address": f"{shipping.get('address1','')} {shipping.get('address2','')}".strip(),
-        "consignee_city": shipping.get("city", ""),
-        "consignee_phone": shipping.get("phone", ""),
-        "cod_amount": cod_amount,
-        "pieces": len(order.get("line_items", [])) or 1,
-        "reference": order.get("name", str(order["id"])),
-        # TODO: add origin/shipper fields TCS requires, weight, service type etc.
-        # once their API docs are in hand.
-    }
+    bearer, ecom = _tcs_get_tokens()
+    payload = _build_tcs_payload(order, ecom)
     resp = requests.post(
-        TCS_API_URL,
-        auth=(TCS_API_USER, TCS_API_KEY),
+        f"{_tcs_base()}/ecom/api/booking/create",
+        headers={"Authorization": f"Bearer {bearer}"},
         json=payload,
         timeout=(10, 30),
     )
-    resp.raise_for_status()
-    data = resp.json()
-    # TODO: adjust these field names to match TCS's actual response shape.
-    return {"tracking_number": data["tracking_number"], "tracking_url": data.get("tracking_url", "")}
+    try:
+        data = resp.json()
+    except ValueError:
+        data = {}
+    if resp.status_code == 401:
+        with _tcs_lock:  # force fresh tokens on the next attempt
+            _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
+        raise RuntimeError("TCS rejected our token (401); will re-authenticate on retry")
+    cn = data.get("consignmentNo")
+    if not (data.get("status") is True and cn):
+        errors = "; ".join(
+            str(e.get("errorname", "")) for e in (data.get("error") or []) if isinstance(e, dict)
+        )
+        raise RuntimeError(
+            f"TCS booking rejected: {data.get('message') or resp.status_code} {errors}".strip()[:250]
+        )
+    log.info("TCS booking created for order %s -> CN %s (%s)", order.get("name"), cn, TCS_ENV)
+    return {"tracking_number": str(cn), "tracking_url": "", "sandbox": TCS_ENV != "production"}
 
 
 # ---------------------------------------------------------------- core processing
@@ -327,15 +485,14 @@ def process_order(order: dict) -> None:
     )
     try:
         booking = book_tcs_shipment(order)
-        if booking.get("simulated") and not ALLOW_SIMULATED_FULFILLMENT:
-            # Safety: without real TCS access, never fulfil a real order with a
-            # fake tracking number (the customer would be emailed it).
-            log.warning(
-                "DRY RUN: order %s (%s) NOT fulfilled in Shopify - TCS is not connected yet",
-                order_id, order.get("name"),
-            )
+        if (booking.get("simulated") or booking.get("sandbox")) and not ALLOW_SIMULATED_FULFILLMENT:
+            # Safety: never fulfil a real order with a fake/test tracking number
+            # (the customer would be emailed it).
+            kind = "simulated" if booking.get("simulated") else "SANDBOX test booking"
+            log.warning("DRY RUN: order %s (%s) %s, NOT fulfilled in Shopify",
+                        order_id, order.get("name"), kind)
             status["orders_booked_simulated_dry_run"] += 1
-            _record(order, "dry run: simulated TCS booking, NOT fulfilled in Shopify")
+            _record(order, f"dry run: {kind} (CN {booking['tracking_number']}), NOT fulfilled in Shopify")
             mark_processed(order_id)
             return
         mark_order_fulfilled(order_id, booking["tracking_number"], booking.get("tracking_url", ""))
@@ -344,7 +501,7 @@ def process_order(order: dict) -> None:
         mark_processed(order_id)
     except Exception as e:
         status["order_failures"] += 1
-        _record(order, f"FAILED: {type(e).__name__} (will retry)")
+        _record(order, f"FAILED: {type(e).__name__}: {str(e)[:150]} (will retry)")
         status["last_error"] = f"{_now()} order failure: {type(e).__name__}"
         log.exception("Failed to process order %s - will retry on next catch-up pass", order_id)
         # deliberately NOT marked processed, so the catch-up loop retries it
