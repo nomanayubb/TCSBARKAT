@@ -58,7 +58,11 @@ TCS_API_USER = os.environ.get("TCS_API_USER", "")
 TCS_API_KEY = os.environ.get("TCS_API_KEY", "")
 TCS_API_URL = os.environ.get("TCS_API_URL", "")  # set once TCS gives you their endpoint
 
-CATCH_UP_INTERVAL_SECONDS = int(os.environ.get("CATCH_UP_INTERVAL_SECONDS", "900"))  # 15 min
+# Off by default: simulated TCS bookings are logged but never fulfil real orders.
+# Set to "true" only to test the full pipeline on a test order (and use your own email).
+ALLOW_SIMULATED_FULFILLMENT = os.environ.get("ALLOW_SIMULATED_FULFILLMENT", "").lower() == "true"
+
+CATCH_UP_INTERVAL_SECONDS =int(os.environ.get("CATCH_UP_INTERVAL_SECONDS", "900"))  # 15 min
 PROCESSED_ORDERS_FILE = Path(os.environ.get("PROCESSED_ORDERS_FILE", "processed_orders.json"))
 
 SHOPIFY_BASE = f"https://{SHOPIFY_STORE_DOMAIN}/admin/api/{SHOPIFY_API_VERSION}"
@@ -240,7 +244,7 @@ def book_tcs_shipment(order: dict) -> dict:
             order["id"], consignee_name, shipping.get("address1"), shipping.get("phone"),
             cod_amount, len(order.get("line_items", [])), fake_tracking,
         )
-        return {"tracking_number": fake_tracking, "tracking_url": ""}
+        return {"tracking_number": fake_tracking, "tracking_url": "", "simulated": True}
 
     payload = {
         "consignee_name": consignee_name,
@@ -278,6 +282,15 @@ def process_order(order: dict) -> None:
     log.info("Processing new order %s (%s)", order_id, order.get("name"))
     try:
         booking = book_tcs_shipment(order)
+        if booking.get("simulated") and not ALLOW_SIMULATED_FULFILLMENT:
+            # Safety: without real TCS access, never fulfil a real order with a
+            # fake tracking number (the customer would be emailed it).
+            log.warning(
+                "DRY RUN: order %s (%s) NOT fulfilled in Shopify - TCS is not connected yet",
+                order_id, order.get("name"),
+            )
+            mark_processed(order_id)
+            return
         mark_order_fulfilled(order_id, booking["tracking_number"], booking.get("tracking_url", ""))
         mark_processed(order_id)
     except Exception:
