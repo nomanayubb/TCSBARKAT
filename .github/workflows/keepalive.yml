@@ -1,0 +1,15 @@
+name: keep-alive
+
+# Render's free tier sleeps after ~15 minutes without traffic. Visiting /health
+# every 5 minutes keeps the service awake so it never misses an order.
+on:
+  schedule:
+    - cron: "*/5 * * * *"
+  workflow_dispatch: {}
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Ping the service
+        run: curl -fsS --max-time 60 --retry 3 --retry-delay 10 https://tcsbarkat.onrender.com/health

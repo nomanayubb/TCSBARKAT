@@ -27,6 +27,7 @@ import logging
 import os
 import threading
 import time
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
@@ -374,6 +375,19 @@ def home():
     return "TCS auto-fulfillment service is running.", 200
 
 
+DISPLAY_UTC_OFFSET_HOURS = float(os.environ.get("DISPLAY_UTC_OFFSET_HOURS", "5"))  # Pakistan = UTC+5
+DISPLAY_TZ_LABEL = os.environ.get("DISPLAY_TZ_LABEL", "PKT")
+
+
+def _local_time(iso_string: str) -> str:
+    try:
+        dt = datetime.fromisoformat(str(iso_string))
+        tz = timezone(timedelta(hours=DISPLAY_UTC_OFFSET_HOURS))
+        return dt.astimezone(tz).strftime("%Y-%m-%d %H:%M")
+    except Exception:
+        return str(iso_string)[:16].replace("T", " ")
+
+
 @app.route("/orders", methods=["GET"])
 def orders_page():
     """Readable list of the latest Shopify orders. Contains customer details,
@@ -409,7 +423,7 @@ def orders_page():
         rows.append(
             "<tr>"
             f"<td><b>{esc(str(o.get('name', '')))}</b></td>"
-            f"<td>{esc(str(o.get('created_at', ''))[:16].replace('T', ' '))}</td>"
+            f"<td>{esc(_local_time(o.get('created_at', '')))}</td>"
             f"<td>{esc(name)}</td>"
             f"<td>{esc(ship.get('phone') or o.get('phone') or '')}</td>"
             f"<td>{esc(address)}</td>"
@@ -422,13 +436,17 @@ def orders_page():
     page = (
         "<!doctype html><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<meta http-equiv='refresh' content='30'>"
         "<title>Orders</title>"
         "<style>body{font-family:Arial,sans-serif;margin:16px}"
         "table{border-collapse:collapse;width:100%}"
         "th,td{border:1px solid #ccc;padding:6px 8px;text-align:left;vertical-align:top;font-size:14px}"
         "th{background:#f0f0f0}.w{overflow-x:auto}</style>"
-        f"<h2>Latest {len(orders)} Shopify orders</h2>"
-        "<div class='w'><table><tr><th>Order</th><th>Placed (UTC)</th><th>Customer</th>"
+        f"<h2>Latest {len(orders)} Shopify orders "
+        f"<small style='font-weight:normal;color:#666'>(updated "
+        f"{esc(_local_time(datetime.now(timezone.utc).isoformat()))} {esc(DISPLAY_TZ_LABEL)}, "
+        "refreshes every 30 seconds)</small></h2>"
+        f"<div class='w'><table><tr><th>Order</th><th>Placed ({esc(DISPLAY_TZ_LABEL)})</th><th>Customer</th>"
         "<th>Phone</th><th>Address</th><th>Items</th><th>Total</th><th>Payment</th>"
         "<th>Fulfilment</th></tr>" + "".join(rows) + "</table></div>"
     )
