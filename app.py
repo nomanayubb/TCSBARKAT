@@ -38,9 +38,17 @@ app = Flask(__name__)
 
 # ---------------------------------------------------------------- config
 SHOPIFY_STORE_DOMAIN = os.environ["SHOPIFY_STORE_DOMAIN"]          # e.g. yourstore.myshopify.com
-SHOPIFY_ADMIN_TOKEN = os.environ["SHOPIFY_ADMIN_API_TOKEN"]        # shpat_...
-SHOPIFY_WEBHOOK_SECRET = os.environ["SHOPIFY_WEBHOOK_SECRET"]      # from the webhook's config
-SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2024-10")
+# Dev Dashboard apps: client id/secret are exchanged for a 24h access token.
+SHOPIFY_CLIENT_ID = os.environ.get("SHOPIFY_CLIENT_ID", "")
+SHOPIFY_CLIENT_SECRET = os.environ.get("SHOPIFY_CLIENT_SECRET", "")
+# Optional: a legacy static token (shpat_...). If set, it is used instead.
+SHOPIFY_ADMIN_TOKEN = os.environ.get("SHOPIFY_ADMIN_API_TOKEN", "")
+# Webhooks from an app are signed with the app's client secret.
+SHOPIFY_WEBHOOK_SECRET = os.environ.get("SHOPIFY_WEBHOOK_SECRET") or SHOPIFY_CLIENT_SECRET
+SHOPIFY_API_VERSION = os.environ.get("SHOPIFY_API_VERSION", "2026-07")
+# Public URL of this service (e.g. https://tcs-fulfillment.onrender.com).
+# When set, the orders/create webhook is registered automatically on startup.
+APP_BASE_URL = os.environ.get("APP_BASE_URL", "").rstrip("/")
 
 TCS_API_USER = os.environ.get("TCS_API_USER", "")
 TCS_API_KEY = os.environ.get("TCS_API_KEY", "")
@@ -50,10 +58,64 @@ CATCH_UP_INTERVAL_SECONDS = int(os.environ.get("CATCH_UP_INTERVAL_SECONDS", "900
 PROCESSED_ORDERS_FILE = Path(os.environ.get("PROCESSED_ORDERS_FILE", "processed_orders.json"))
 
 SHOPIFY_BASE = f"https://{SHOPIFY_STORE_DOMAIN}/admin/api/{SHOPIFY_API_VERSION}"
-SHOPIFY_HEADERS = {
-    "X-Shopify-Access-Token": SHOPIFY_ADMIN_TOKEN,
-    "Content-Type": "application/json",
-}
+
+_token_cache = {"token": "", "expires_at": 0.0}
+_token_lock = threading.Lock()
+
+
+def get_access_token() -> str:
+    """Static token if configured, otherwise a client-credentials token that
+    is cached and refreshed shortly before its 24h expiry."""
+    if SHOPIFY_ADMIN_TOKEN:
+        return SHOPIFY_ADMIN_TOKEN
+    with _token_lock:
+        if _token_cache["token"] and time.time() < _token_cache["expires_at"] - 300:
+            return _token_cache["token"]
+        resp = requests.post(
+            f"https://{SHOPIFY_STORE_DOMAIN}/admin/oauth/access_token",
+            data={
+                "grant_type": "client_credentials",
+                "client_id": SHOPIFY_CLIENT_ID,
+                "client_secret": SHOPIFY_CLIENT_SECRET,
+            },
+            timeout=30,
+        )
+        resp.raise_for_status()
+        data = resp.json()
+        _token_cache["token"] = data["access_token"]
+        _token_cache["expires_at"] = time.time() + int(data.get("expires_in", 86399))
+        log.info("Fetched a new Shopify access token")
+        return _token_cache["token"]
+
+
+def shopify_headers() -> dict:
+    return {
+        "X-Shopify-Access-Token": get_access_token(),
+        "Content-Type": "application/json",
+    }
+
+
+def ensure_webhook_registered() -> None:
+    """Create the orders/create webhook pointing at this service if missing."""
+    if not APP_BASE_URL:
+        log.info("APP_BASE_URL not set - skipping automatic webhook registration")
+        return
+    address = f"{APP_BASE_URL}/webhooks/orders-create"
+    existing = requests.get(
+        f"{SHOPIFY_BASE}/webhooks.json", headers=shopify_headers(),
+        params={"topic": "orders/create"}, timeout=30,
+    )
+    existing.raise_for_status()
+    if any(w.get("address") == address for w in existing.json().get("webhooks", [])):
+        log.info("Webhook already registered at %s", address)
+        return
+    resp = requests.post(
+        f"{SHOPIFY_BASE}/webhooks.json", headers=shopify_headers(),
+        json={"webhook": {"topic": "orders/create", "address": address, "format": "json"}},
+        timeout=30,
+    )
+    resp.raise_for_status()
+    log.info("Registered orders/create webhook at %s", address)
 
 _lock = threading.Lock()  # guards processed-orders file from concurrent webhook + catch-up writes
 
@@ -100,7 +162,7 @@ def fetch_unfulfilled_orders(days_back: int = 3) -> list:
     since = time.strftime("%Y-%m-%dT%H:%M:%S%z", time.gmtime(time.time() - days_back * 86400))
     resp = requests.get(
         f"{SHOPIFY_BASE}/orders.json",
-        headers=SHOPIFY_HEADERS,
+        headers=shopify_headers(),
         params={
             "status": "open",
             "fulfillment_status": "unfulfilled",
@@ -117,7 +179,7 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
     # Shopify's fulfillment API needs the fulfillment order id, not the order id directly.
     fo_resp = requests.get(
         f"{SHOPIFY_BASE}/orders/{order_id}/fulfillment_orders.json",
-        headers=SHOPIFY_HEADERS, timeout=30,
+        headers=shopify_headers(), timeout=30,
     )
     fo_resp.raise_for_status()
     fulfillment_orders = fo_resp.json().get("fulfillment_orders", [])
@@ -140,7 +202,7 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
     }
     resp = requests.post(
         f"{SHOPIFY_BASE}/fulfillments.json",
-        headers=SHOPIFY_HEADERS, json=payload, timeout=30,
+        headers=shopify_headers(), json=payload, timeout=30,
     )
     resp.raise_for_status()
     log.info("Order %s marked fulfilled in Shopify (tracking %s)", order_id, tracking_number)
@@ -242,7 +304,14 @@ def health():
 
 # ---------------------------------------------------------------- catch-up loop
 def catch_up_loop():
+    webhook_ok = False
     while True:
+        if not webhook_ok:
+            try:
+                ensure_webhook_registered()
+                webhook_ok = True
+            except Exception:
+                log.exception("Webhook registration failed - will retry next pass")
         try:
             orders = fetch_unfulfilled_orders()
             log.info("Catch-up pass: %d unfulfilled order(s) found", len(orders))
