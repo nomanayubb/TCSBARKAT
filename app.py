@@ -74,10 +74,12 @@ TCS_SHIPPER_ZIP = os.environ.get("TCS_SHIPPER_ZIP", "")
 TCS_SHIPPER_MOBILE = os.environ.get("TCS_SHIPPER_MOBILE", "")
 # TCS marks middlename as mandatory; Shopify has none, so a placeholder is sent.
 TCS_CONSIGNEE_MIDDLENAME = os.environ.get("TCS_CONSIGNEE_MIDDLENAME", "N/A")
-TCS_CONFIGURED = all([
-    TCS_CLIENT_ID, TCS_CLIENT_SECRET, TCS_USERNAME, TCS_PASSWORD, TCS_ACCOUNT_NO,
-    TCS_COST_CENTER_CODE, TCS_SHIPPER_NAME, TCS_SHIPPER_ADDRESS, TCS_SHIPPER_CITY,
-    TCS_SHIPPER_MOBILE,
+# A ready-made long-lived bearer token (e.g. generated in Envio) replaces the
+# client id/secret login. Username/password are only needed for the extra e-com token.
+TCS_BEARER_TOKEN = os.environ.get("TCS_BEARER_TOKEN", "")
+TCS_CONFIGURED = bool(TCS_BEARER_TOKEN or (TCS_CLIENT_ID and TCS_CLIENT_SECRET)) and all([
+    TCS_ACCOUNT_NO, TCS_COST_CENTER_CODE, TCS_SHIPPER_NAME, TCS_SHIPPER_ADDRESS,
+    TCS_SHIPPER_CITY, TCS_SHIPPER_MOBILE,
 ])
 
 # Password for the /orders page (it shows customer details). Page is disabled if unset.
@@ -302,6 +304,9 @@ def _tcs_get_tokens() -> tuple:
     """Returns (bearer_token, ecom_access_token), refreshing either when near expiry."""
     with _tcs_lock:
         now = time.time()
+        if TCS_BEARER_TOKEN:
+            _tcs_tokens["bearer"] = TCS_BEARER_TOKEN
+            _tcs_tokens["bearer_exp"] = float("inf")
         if not (_tcs_tokens["bearer"] and now < _tcs_tokens["bearer_exp"] - 300):
             r = requests.get(
                 f"{_tcs_base()}/auth/api/auth",
@@ -315,6 +320,10 @@ def _tcs_get_tokens() -> tuple:
             _tcs_tokens["bearer"] = res["accessToken"]
             _tcs_tokens["bearer_exp"] = _expiry_ts(res.get("expiry"))
             log.info("Fetched a TCS bearer token (%s)", TCS_ENV)
+        if not (TCS_USERNAME and TCS_PASSWORD):
+            # No e-com login configured: the bearer token doubles as the body token.
+            _tcs_tokens["ecom"] = _tcs_tokens["bearer"]
+            _tcs_tokens["ecom_exp"] = float("inf")
         if not (_tcs_tokens["ecom"] and now < _tcs_tokens["ecom_exp"] - 300):
             r = requests.get(
                 f"{_tcs_base()}/ecom/api/authentication/token",
