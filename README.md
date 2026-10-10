@@ -1,90 +1,71 @@
-# Shopify → TCS Auto-Fulfillment
+# Shopify → TCS Auto-Booking
 
-Automatically books a TCS courier shipment for every new Shopify order and
-marks it fulfilled with the tracking number. Runs as a tiny always-on web
-service (free on Render) so it works even when your own computer is off.
+Catches every new Shopify order, books a TCS shipment through TCS's COD API,
+then marks the order fulfilled with the tracking number. Runs on Render's free
+tier so it works while your own computer is off.
+
+Live service: https://tcsbarkat.onrender.com — repo: `nomanayubb/TCSBARKAT`.
 
 ## How it works
 
-- **Webhook** (`/webhooks/orders-create`): Shopify calls this the instant a
-  new order is placed. We verify the request is genuinely from Shopify
-  (HMAC signature check), then book the TCS shipment and mark the order
-  fulfilled.
-- **Catch-up loop** (runs every 15 min in the background): independently
-  asks Shopify "what's still unfulfilled?" and processes anything the
-  webhook might have missed (e.g. a brief outage). This means even if the
-  service was down for hours, it self-heals the moment it's back up —
-  nothing is silently lost.
-- **Dedup file** (`processed_orders.json`): stops the same order from being
-  booked with TCS twice if a webhook is delivered more than once (Shopify
-  explicitly warns this can happen) or the catch-up loop and a webhook
-  overlap.
+- **Webhook** `/webhooks/orders-create` — Shopify calls it the moment an order
+  is placed (HMAC-verified with the app's client secret).
+- **Catch-up loop** — every 15 min asks Shopify for unfulfilled orders from the
+  last 3 days and processes anything missed. A watchdog restarts the loop if it
+  ever stalls. The loop starts on the first request, not at import.
+- **TCS booking** (`book_tcs_shipment`) — follows `COD-API-UserManual.pdf`:
+  Authorization (bearer) → optional E-COM authentication → `booking/create`.
+  Phone numbers are normalised to `03xxxxxxxxx`, COD is 0 for paid orders,
+  weight defaults to 0.5 kg minimum.
+- **Dry-run safeguard** — simulated or **sandbox** bookings are logged but the
+  order is **not** fulfilled in Shopify (customers would be emailed a test
+  number). Only a production booking fulfils the order.
 
-## What's stubbed and needs filling in
+## Endpoints
 
-`book_tcs_shipment()` in `app.py` is a stub. Until `TCS_API_URL` is set, it
-*simulates* a booking (logs what it would have sent, returns a fake
-tracking number) so you can test the entire pipeline — webhook receipt,
-catch-up recovery, marking Shopify fulfilled — before TCS API access
-exists. Once you have TCS's real API docs, fill in that function's request
-shape (field names are guessed/typical placeholders right now) and set the
-three `TCS_*` environment variables below.
+| Path | Purpose |
+|---|---|
+| `/health` | liveness (used by the keep-alive job) |
+| `/status` | counters, last errors, recent orders + outcome (no customer data) |
+| `/orders?key=ORDERS_PAGE_KEY` | readable table of the latest 50 Shopify orders, Pakistan time, refreshes every 30 s |
 
-## Setup
+## Environment variables (Render → Environment)
 
-### 1. Shopify custom app
-Already covered in chat — you need `SHOPIFY_STORE_DOMAIN` and
-`SHOPIFY_ADMIN_API_TOKEN` (the `shpat_...` token) from a custom app with
-`read_orders`, `read_fulfillments`, `write_fulfillments` scopes.
+Shopify: `SHOPIFY_STORE_DOMAIN` (e.g. `60nibp-51.myshopify.com`, no `https://`),
+`SHOPIFY_CLIENT_ID`, `SHOPIFY_CLIENT_SECRET`, `APP_BASE_URL`
+(`https://tcsbarkat.onrender.com`, enables automatic webhook registration).
+Optional: `SHOPIFY_API_VERSION`, `CATCH_UP_INTERVAL_SECONDS`.
 
-### 2. Deploy to Render
-1. Push this folder to a GitHub repo.
-2. In Render: **New → Web Service**, connect the repo.
-3. Runtime: Python 3. Render will auto-detect `Procfile` and
-   `requirements.txt`.
-4. Add environment variables (Render dashboard → Environment):
-   - `SHOPIFY_STORE_DOMAIN`
-   - `SHOPIFY_ADMIN_API_TOKEN`
-   - `SHOPIFY_WEBHOOK_SECRET` (see step 3 below — you'll get this when
-     creating the webhook)
-   - `TCS_API_URL`, `TCS_API_USER`, `TCS_API_KEY` (leave blank until you
-     have real TCS access — the stub handles that gracefully)
-5. Deploy. Render gives you a public URL like
-   `https://your-service.onrender.com`.
+Orders page: `ORDERS_PAGE_KEY` (long random password; page is disabled if unset),
+`DISPLAY_UTC_OFFSET_HOURS` (default 5), `DISPLAY_TZ_LABEL` (default PKT).
 
-### 3. Register the Shopify webhook
-In Shopify admin → **Settings → Notifications** (or via the Admin API —
-ask if you want this automated instead of manual), create a webhook:
-- Event: **Order creation**
-- Format: JSON
-- URL: `https://your-service.onrender.com/webhooks/orders-create`
+TCS: `TCS_BEARER_TOKEN` (or `TCS_CLIENT_ID` + `TCS_CLIENT_SECRET`),
+`TCS_ACCOUNT_NO`, `TCS_COST_CENTER_CODE`, `TCS_SHIPPER_NAME`,
+`TCS_SHIPPER_ADDRESS`, `TCS_SHIPPER_CITY`, `TCS_SHIPPER_MOBILE`.
+Optional: `TCS_USERNAME` + `TCS_PASSWORD` (E-COM token), `TCS_SERVICE_CODE`
+(default `O`), `TCS_SHIPPER_CITY_CODE`, `TCS_SHIPPER_ZIP`,
+`TCS_CONSIGNEE_MIDDLENAME` (default `N/A`), `TCS_ENV`.
 
-Shopify shows you a **webhook signing secret** when you create it via the
-API (if created through the UI, it uses the app's API secret — ask if you
-want this walked through more precisely for your exact Shopify plan).
-That value goes into `SHOPIFY_WEBHOOK_SECRET`.
+**`TCS_ENV` defaults to sandbox.** Setting `TCS_ENV=production` makes the
+service book *real* shipments and fulfil orders — including every unfulfilled
+order from the last 3 days. Cancel test orders in Shopify first.
+`ALLOW_SIMULATED_FULFILLMENT=true` overrides the safeguard (testing only).
 
-## Known limitation (free Render tier)
+## Shopify app setup (Dev Dashboard)
 
-Render's free web service has **ephemeral disk** — `processed_orders.json`
-resets on every redeploy/restart. This doesn't cause missed orders (the
-catch-up loop only asks Shopify for orders still marked *unfulfilled*
-there, which is the real source of truth), but in a narrow race window
-right around a restart it could theoretically re-attempt a TCS booking for
-an order that was being processed at that exact moment. Low-impact, but
-worth knowing. If this matters for your volume, Render's paid tier adds a
-persistent disk, or we switch the dedup store to a free hosted database
-(e.g. a free-tier Postgres) later.
+Create an app, release a version with scopes `read_orders`, `read_fulfillments`,
+`write_fulfillments`, `read_merchant_managed_fulfillment_orders`,
+`write_merchant_managed_fulfillment_orders`, install it on the store (same
+Shopify organization), and copy Client ID/secret from the app's Settings. The
+service exchanges them for a 24 h token automatically.
 
-## Local testing
+## Known limits
 
-```bash
-pip install -r requirements.txt
-export SHOPIFY_STORE_DOMAIN=yourstore.myshopify.com
-export SHOPIFY_ADMIN_API_TOKEN=shpat_...
-export SHOPIFY_WEBHOOK_SECRET=...
-python app.py
-```
-
-Use `ngrok http 5000` to get a public URL for testing the real Shopify
-webhook against your local machine before deploying to Render.
+- Render free tier: ephemeral disk (`processed_orders.json` resets on restart —
+  fulfilment status in Shopify is the source of truth), and it sleeps without
+  traffic; `.github/workflows/keepalive.yml` pings `/health` every 5 min.
+- Tracking URL is left blank (not given in the TCS manual); Shopify still shows
+  the CN number.
+- Unverified until tested against TCS: using the bearer token as the booking
+  body `accesstoken` when no E-COM username/password is set; city names must
+  match TCS's city list.
