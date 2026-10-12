@@ -27,6 +27,7 @@ Live service: https://tcsbarkat.onrender.com — repo: `nomanayubb/TCSBARKAT`.
 |---|---|
 | `/health` | liveness (used by the keep-alive job) |
 | `/status` | counters, last errors, recent orders + outcome (no customer data) |
+| `/report?key=ORDERS_PAGE_KEY&from=YYYY-MM-DD&to=YYYY-MM-DD` | parcels booked per date and every TCS status (delivered / returned / in transit...), pulled from TCS's Payment Detail API; add `.json` (`/report.json`) for raw data. Default: last 30 days, max 92 |
 | `/orders?key=ORDERS_PAGE_KEY` | readable table of the latest 50 Shopify orders, Pakistan time, refreshes every 30 s |
 
 ## Environment variables (Render → Environment)
@@ -42,7 +43,7 @@ Orders page: `ORDERS_PAGE_KEY` (long random password; page is disabled if unset)
 TCS: `TCS_BEARER_TOKEN` (or `TCS_CLIENT_ID` + `TCS_CLIENT_SECRET`),
 `TCS_ACCOUNT_NO`, `TCS_COST_CENTER_CODE`, `TCS_SHIPPER_NAME`,
 `TCS_SHIPPER_ADDRESS`, `TCS_SHIPPER_CITY`, `TCS_SHIPPER_MOBILE`.
-Optional: `TCS_USERNAME` + `TCS_PASSWORD` (E-COM token), `TCS_SERVICE_CODE`
+Optional: `TCS_CUSTOMER_NO` (report API customer number; defaults to `TCS_ACCOUNT_NO`), `TCS_USERNAME` + `TCS_PASSWORD` (E-COM token), `TCS_SERVICE_CODE`
 (default `O`), `TCS_SHIPPER_CITY_CODE`, `TCS_SHIPPER_ZIP`,
 `TCS_CONSIGNEE_MIDDLENAME` (default `N/A`), `TCS_ENV`.
 

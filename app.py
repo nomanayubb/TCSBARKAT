@@ -28,11 +28,12 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from collections import Counter
+from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from flask import Flask, request, abort
+from flask import Flask, request, abort, jsonify
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tcs-fulfillment")
@@ -64,6 +65,8 @@ TCS_CLIENT_SECRET = os.environ.get("TCS_CLIENT_SECRET", "")
 TCS_USERNAME = os.environ.get("TCS_USERNAME", "")
 TCS_PASSWORD = os.environ.get("TCS_PASSWORD", "")
 TCS_ACCOUNT_NO = os.environ.get("TCS_ACCOUNT_NO", "")
+# Customer number for the report API; defaults to the account number.
+TCS_CUSTOMER_NO = os.environ.get("TCS_CUSTOMER_NO", "")
 TCS_COST_CENTER_CODE = os.environ.get("TCS_COST_CENTER_CODE", "")
 TCS_SERVICE_CODE = os.environ.get("TCS_SERVICE_CODE", "O")
 TCS_SHIPPER_NAME = os.environ.get("TCS_SHIPPER_NAME", "")
@@ -617,6 +620,191 @@ def orders_page():
         "<th>Fulfilment</th></tr>" + "".join(rows) + "</table></div>"
     )
     return page, 200
+
+
+# ---------------------------------------------------------------- TCS parcel report
+# Source: TCS "Payment Detail" API (all parcels in a date range with booking date,
+# status code, COD paid and charges) + "Delivery Status List" for status names.
+STATUS_LABELS = {"OK": "Delivered", "RO": "Returned to origin", "SC": "Awaiting receiver collection"}
+_labels_cache = {"at": 0.0, "map": {}}
+
+
+def _tcs_status_labels() -> dict:
+    if time.time() - _labels_cache["at"] > 3600:
+        try:
+            bearer, _ = _tcs_get_tokens()
+            r = requests.get(
+                f"{_tcs_base()}/ecom/setup/deliverystatuslist",
+                headers={"Authorization": f"Bearer {bearer}"}, timeout=(10, 30),
+            )
+            r.raise_for_status()
+            _labels_cache["map"] = {
+                str(d["statuscode"]): str(d.get("description") or d["statuscode"])
+                for d in ((r.json() or {}).get("detail") or []) if d.get("statuscode")
+            }
+        except Exception:
+            log.exception("Could not load TCS status names (showing raw codes)")
+        _labels_cache["at"] = time.time()  # don't retry on every page view
+    return {**_labels_cache["map"], **STATUS_LABELS}
+
+
+def _fetch_tcs_parcels(d_from: date, d_to: date) -> list:
+    """All parcels booked between the two dates, fetched in 7-day slices."""
+    bearer, ecom = _tcs_get_tokens()
+    parcels = {}
+    cur = d_from
+    while cur <= d_to:
+        end = min(cur + timedelta(days=6), d_to)
+        r = requests.get(
+            f"{_tcs_base()}/ecom/api/Payment/detail",
+            headers={"Authorization": f"Bearer {bearer}"},
+            json={
+                "accesstoken": ecom,
+                "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
+                "fromdate": cur.isoformat(),
+                "todate": end.isoformat(),
+            },
+            timeout=(10, 60),
+        )
+        if r.status_code == 401:
+            with _tcs_lock:
+                _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
+            raise RuntimeError("TCS rejected the token (401)")
+        r.raise_for_status()
+        for row in ((r.json() or {}).get("detail") or []):
+            cn = str(row.get("cn by courier") or "")
+            if cn:
+                parcels[cn] = row
+        cur = end + timedelta(days=1)
+    return list(parcels.values())
+
+
+def _parse_dmy(text):
+    try:
+        return datetime.strptime(str(text), "%d/%m/%Y").date()
+    except Exception:
+        return None
+
+
+def _build_report(d_from: date, d_to: date) -> dict:
+    rows = _fetch_tcs_parcels(d_from, d_to)
+    labels = _tcs_status_labels()
+    status_totals = Counter()
+    by_date = {}
+    parcels = []
+    charges = paid = 0.0
+    for r in rows:
+        code = str(r.get("cn status") or "?")
+        label = labels.get(code, code)
+        booked = _parse_dmy(r.get("booking date"))
+        key = booked.isoformat() if booked else "unknown"
+        status_totals[label] += 1
+        day = by_date.setdefault(key, {"total": 0, "statuses": Counter(), "charges": 0.0})
+        day["total"] += 1
+        day["statuses"][label] += 1
+        day["charges"] += float(r.get("delivery charges") or 0)
+        charges += float(r.get("delivery charges") or 0)
+        paid += float(r.get("amount paid") or 0)
+        parcels.append({
+            "cn": r.get("cn by courier"), "booked": key, "delivered_on": r.get("delivery date"),
+            "status": label, "code": code, "city": r.get("city"), "order": r.get("order no"),
+            "weight": r.get("parcel weight"), "amount_paid": r.get("amount paid"),
+            "charges": r.get("delivery charges"),
+        })
+    parcels.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
+    return {
+        "from": d_from.isoformat(), "to": d_to.isoformat(), "env": TCS_ENV,
+        "total": len(rows), "delivery_charges": round(charges, 2), "amount_paid": round(paid, 2),
+        "status_totals": dict(status_totals.most_common()),
+        "by_date": {
+            k: {"total": v["total"], "statuses": dict(v["statuses"]), "charges": round(v["charges"], 2)}
+            for k, v in sorted(by_date.items(), reverse=True)
+        },
+        "parcels": parcels,
+    }
+
+
+def _report_html(rep: dict, key: str) -> str:
+    esc = html.escape
+    total = rep["total"] or 1
+    cols = list(rep["status_totals"].keys())
+    head = "".join(f"<th>{esc(c)}</th>" for c in cols)
+    date_rows = "".join(
+        f"<tr><td><b>{esc(d)}</b></td><td><b>{v['total']}</b></td>"
+        + "".join(f"<td>{v['statuses'].get(c, 0) or ''}</td>" for c in cols)
+        + f"<td>{v['charges']:.0f}</td></tr>"
+        for d, v in rep["by_date"].items()
+    )
+    status_rows = "".join(
+        f"<tr><td>{esc(s)}</td><td>{n}</td><td>{n * 100 / total:.1f}%</td></tr>"
+        for s, n in rep["status_totals"].items()
+    )
+    parcel_rows = "".join(
+        "<tr>" + "".join(f"<td>{esc(str(p[k]) if p[k] is not None else '')}</td>" for k in
+                         ("cn", "booked", "delivered_on", "status", "city", "order",
+                          "weight", "amount_paid", "charges")) + "</tr>"
+        for p in rep["parcels"][:500]
+    )
+    return (
+        "<!doctype html><meta charset='utf-8'>"
+        "<meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>TCS report</title>"
+        "<style>body{font-family:Arial,sans-serif;margin:16px}"
+        "table{border-collapse:collapse;margin-bottom:24px}"
+        "th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:14px}"
+        "th{background:#f0f0f0}.w{overflow-x:auto}.c{display:inline-block;margin:0 14px 10px 0;"
+        "padding:10px 16px;background:#f5f5f5;border-radius:6px}</style>"
+        f"<h2>TCS parcels {esc(rep['from'])} to {esc(rep['to'])} "
+        f"<small style='font-weight:normal;color:#666'>({esc(rep['env'])} data)</small></h2>"
+        f"<form method='get'><input type='hidden' name='key' value='{esc(key)}'>"
+        f"From <input type='date' name='from' value='{esc(rep['from'])}'> "
+        f"to <input type='date' name='to' value='{esc(rep['to'])}'> <button>Show</button></form><br>"
+        f"<div class='c'><b>{rep['total']}</b><br>parcels booked</div>"
+        + "".join(f"<div class='c'><b>{n}</b><br>{esc(s)}</div>" for s, n in rep["status_totals"].items())
+        + f"<div class='c'><b>{rep['amount_paid']:.0f}</b><br>COD paid</div>"
+        f"<div class='c'><b>{rep['delivery_charges']:.0f}</b><br>delivery charges</div>"
+        "<h3>Parcels booked per date</h3><div class='w'><table>"
+        f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div>"
+        "<h3>Status summary</h3><div class='w'><table>"
+        f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
+        f"<h3>All parcels (latest {min(500, len(rep['parcels']))})</h3><div class='w'><table>"
+        "<tr><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
+        "<th>Order</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
+        f"{parcel_rows}</table></div>"
+    )
+
+
+@app.route("/report", methods=["GET"])
+@app.route("/report.json", methods=["GET"])
+def report():
+    """Parcels per booking date and every status, straight from TCS.
+    /report?key=KEY&from=YYYY-MM-DD&to=YYYY-MM-DD   (add .json for the raw data)."""
+    if not ORDERS_PAGE_KEY:
+        return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
+    if not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    if not TCS_CONFIGURED:
+        return "TCS settings are not complete yet (token, account number, cost center, shipper).", 503
+
+    today = datetime.now(timezone(timedelta(hours=DISPLAY_UTC_OFFSET_HOURS))).date()
+    try:
+        d_to = date.fromisoformat(request.args.get("to") or today.isoformat())
+        d_from = date.fromisoformat(request.args.get("from") or (d_to - timedelta(days=29)).isoformat())
+    except ValueError:
+        return "Dates must look like 2026-10-31.", 400
+    if d_from > d_to:
+        d_from, d_to = d_to, d_from
+    if (d_to - d_from).days > 92:
+        d_from = d_to - timedelta(days=92)  # keep the number of TCS calls reasonable
+
+    try:
+        rep = _build_report(d_from, d_to)
+    except Exception as e:
+        log.exception("Report failed")
+        return f"Could not load the report from TCS: {type(e).__name__}: {str(e)[:200]}", 502
+    if request.path.endswith(".json"):
+        return jsonify(rep), 200
+    return _report_html(rep, request.args.get("key", "")), 200
 
 
 @app.route("/status", methods=["GET"])
