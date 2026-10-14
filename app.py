@@ -295,8 +295,14 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
 # Implements TCS's "COD API User Guide v1.0": Authorization -> E-COM Authentication
 # -> Booking Create. Sandbox (devconnect) is the default; production (ociconnect)
 # only when TCS_ENV=production.
+LIVE_TCS_ENVS = ("production", "connect")  # "connect" = connect.tcscourier.com, the host named in Envio tokens
+
+
 def _tcs_base(env=None) -> str:
-    return ("https://ociconnect.tcscourier.com" if (env or TCS_ENV) == "production"
+    env = env or TCS_ENV
+    if env == "connect":
+        return "https://connect.tcscourier.com"
+    return ("https://ociconnect.tcscourier.com" if env == "production"
             else "https://devconnect.tcscourier.com")
 
 
@@ -494,7 +500,7 @@ def book_tcs_shipment(order: dict) -> dict:
             f"TCS booking rejected: {data.get('message') or resp.status_code} {errors}".strip()[:250]
         )
     log.info("TCS booking created for order %s -> CN %s (%s)", order.get("name"), cn, TCS_ENV)
-    return {"tracking_number": str(cn), "tracking_url": "", "sandbox": TCS_ENV != "production"}
+    return {"tracking_number": str(cn), "tracking_url": "", "sandbox": TCS_ENV not in LIVE_TCS_ENVS}
 
 
 # ---------------------------------------------------------------- core processing
@@ -707,7 +713,7 @@ def _report_envs() -> list:
     if TCS_REPORT_ENV:
         return [TCS_REPORT_ENV]
     if TCS_BEARER_TOKEN:
-        return [_report_env["ok"]] if _report_env["ok"] else ["production", "sandbox"]
+        return [_report_env["ok"]] if _report_env["ok"] else ["connect", "production", "sandbox"]
     return [TCS_ENV]
 
 
