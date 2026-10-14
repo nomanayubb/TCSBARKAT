@@ -366,6 +366,15 @@ def _pk_mobile(raw) -> str:
     return digits
 
 
+def _tcs_reject_reason(resp) -> str:
+    """TCS's own words for a 401 (they differ: bearer vs access token) - no secrets in them."""
+    try:
+        body = resp.json() or {}
+        return str(body.get("message") or body.get("code") or body.get("status") or "")[:160]
+    except Exception:
+        return (getattr(resp, "text", "") or "")[:160]
+
+
 def _pad3(text: str) -> str:
     text = (text or "").strip()
     return text if len(text) >= 3 else text.ljust(3, ".")
@@ -475,7 +484,7 @@ def book_tcs_shipment(order: dict) -> dict:
     if resp.status_code == 401:
         with _tcs_lock:  # force fresh tokens on the next attempt
             _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
-        raise RuntimeError("TCS rejected our token (401); will re-authenticate on retry")
+        raise RuntimeError(f"TCS rejected our token (401): {_tcs_reject_reason(resp)}")
     cn = data.get("consignmentNo")
     if not (data.get("status") is True and cn):
         errors = "; ".join(
@@ -677,7 +686,7 @@ def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
         if r.status_code == 401:
             with _tcs_lock:
                 _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
-            raise RuntimeError("TCS rejected the token (401)")
+            raise RuntimeError(f"TCS rejected the token (401): {_tcs_reject_reason(r)}")
         r.raise_for_status()
         for row in ((r.json() or {}).get("detail") or []):
             cn = str(row.get("cn by courier") or "")
