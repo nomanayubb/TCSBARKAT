@@ -80,10 +80,17 @@ TCS_CONSIGNEE_MIDDLENAME = os.environ.get("TCS_CONSIGNEE_MIDDLENAME", "N/A")
 # A ready-made long-lived bearer token (e.g. generated in Envio) replaces the
 # client id/secret login. Username/password are only needed for the extra e-com token.
 TCS_BEARER_TOKEN = os.environ.get("TCS_BEARER_TOKEN", "")
-TCS_CONFIGURED = bool(TCS_BEARER_TOKEN or (TCS_CLIENT_ID and TCS_CLIENT_SECRET)) and all([
-    TCS_ACCOUNT_NO, TCS_COST_CENTER_CODE, TCS_SHIPPER_NAME, TCS_SHIPPER_ADDRESS,
-    TCS_SHIPPER_CITY, TCS_SHIPPER_MOBILE,
-])
+TCS_HAS_LOGIN = bool(TCS_BEARER_TOKEN or (TCS_CLIENT_ID and TCS_CLIENT_SECRET))
+# Setting NAMES only (never values) - shown on /status so missing ones are obvious.
+TCS_MISSING = (
+    ([] if TCS_HAS_LOGIN else ["TCS_BEARER_TOKEN"])
+    + [name for name, value in [
+        ("TCS_ACCOUNT_NO", TCS_ACCOUNT_NO), ("TCS_COST_CENTER_CODE", TCS_COST_CENTER_CODE),
+        ("TCS_SHIPPER_NAME", TCS_SHIPPER_NAME), ("TCS_SHIPPER_ADDRESS", TCS_SHIPPER_ADDRESS),
+        ("TCS_SHIPPER_CITY", TCS_SHIPPER_CITY), ("TCS_SHIPPER_MOBILE", TCS_SHIPPER_MOBILE),
+    ] if not value]
+)
+TCS_CONFIGURED = not TCS_MISSING  # needed for booking
 
 # Password for the /orders page (it shows customer details). Page is disabled if unset.
 ORDERS_PAGE_KEY = os.environ.get("ORDERS_PAGE_KEY", "")
@@ -172,6 +179,7 @@ status = {
     "last_order_customer_fields_present": None,
     "dry_run": not ALLOW_SIMULATED_FULFILLMENT,
     "tcs_connected": TCS_CONFIGURED,
+    "tcs_missing_settings": TCS_MISSING,
     "tcs_env": TCS_ENV,
 }
 
@@ -783,8 +791,15 @@ def report():
         return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
     if not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
         abort(401)
-    if not TCS_CONFIGURED:
-        return "TCS settings are not complete yet (token, account number, cost center, shipper).", 503
+    # The report only needs a TCS login and the customer/account number - not the
+    # shipper or cost-center settings that booking needs.
+    report_missing = (
+        ([] if TCS_HAS_LOGIN else ["TCS_BEARER_TOKEN"])
+        + ([] if (TCS_CUSTOMER_NO or TCS_ACCOUNT_NO) else ["TCS_ACCOUNT_NO"])
+    )
+    if report_missing:
+        return ("Add these in Render -> Environment to enable the report: "
+                + ", ".join(report_missing)), 503
 
     today = datetime.now(timezone(timedelta(hours=DISPLAY_UTC_OFFSET_HOURS))).date()
     try:
