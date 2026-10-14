@@ -854,6 +854,7 @@ def _report_html(rep: dict, key: str) -> str:
         "th,td{border:1px solid #ccc;padding:6px 10px;text-align:left;font-size:14px}"
         "th{background:#f0f0f0}.w{overflow-x:auto}.c{display:inline-block;margin:0 14px 10px 0;"
         "padding:10px 16px;background:#f5f5f5;border-radius:6px}</style>"
+        "<p style='letter-spacing:.15em;text-transform:uppercase;color:#8a6d1d;font-size:12px;margin:0'>Premium Standards, Exquisite Quality</p>"
         f"<h2>TCS parcels {esc(rep['from'])} to {esc(rep['to'])} "
         f"<small style='font-weight:normal;color:#666'>({esc(rep['env'])} data)</small></h2>"
         f"<form method='get'><input type='hidden' name='key' value='{esc(key)}'>"
