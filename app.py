@@ -327,7 +327,7 @@ def _tcs_get_tokens() -> tuple:
         if not (_tcs_tokens["bearer"] and now < _tcs_tokens["bearer_exp"] - 300):
             r = requests.get(
                 f"{_tcs_base()}/auth/api/auth",
-                json={"clientid": TCS_CLIENT_ID, "clientsecret": TCS_CLIENT_SECRET},
+                params={"clientid": TCS_CLIENT_ID, "clientsecret": TCS_CLIENT_SECRET},
                 timeout=(10, 30),
             )
             r.raise_for_status()
@@ -345,7 +345,7 @@ def _tcs_get_tokens() -> tuple:
             r = requests.get(
                 f"{_tcs_base()}/ecom/api/authentication/token",
                 headers={"Authorization": f"Bearer {_tcs_tokens['bearer']}"},
-                json={"username": TCS_USERNAME, "password": TCS_PASSWORD},
+                params={"username": TCS_USERNAME, "password": TCS_PASSWORD},
                 timeout=(10, 30),
             )
             r.raise_for_status()
@@ -674,6 +674,8 @@ def _tcs_status_labels(env=None) -> dict:
 def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
     """All parcels booked between the two dates, fetched in 7-day slices."""
     bearer, ecom = _tcs_get_tokens()
+    if not (TCS_USERNAME and TCS_PASSWORD):
+        raise RuntimeError("Add TCS_USERNAME and TCS_PASSWORD (your TCS/Envio API login) in Render - the report needs an E-COM access token")
     parcels = {}
     cur = d_from
     while cur <= d_to:
@@ -681,7 +683,7 @@ def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
         r = requests.get(
             f"{_tcs_base(env)}/ecom/api/Payment/detail",
             headers={"Authorization": f"Bearer {bearer}"},
-            json={
+            params={  # TCS reads GET parameters from the query string
                 "accesstoken": ecom,
                 "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
                 "fromdate": cur.isoformat(),
