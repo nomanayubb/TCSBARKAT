@@ -28,6 +28,7 @@ import os
 import re
 import threading
 import time
+import urllib.parse
 from collections import Counter
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -306,7 +307,8 @@ def _tcs_base(env=None) -> str:
             else "https://devconnect.tcscourier.com")
 
 
-_tcs_tokens = {"bearer": "", "bearer_exp": 0.0, "ecom": "", "ecom_exp": 0.0}
+_tcs_tokens_by_env = {}
+_blank_tokens = lambda: {"bearer": "", "bearer_exp": 0.0, "ecom": "", "ecom_exp": 0.0}
 _tcs_lock = threading.Lock()
 
 
@@ -317,16 +319,18 @@ def _expiry_ts(value, fallback_seconds=3000) -> float:
         return time.time() + fallback_seconds
 
 
-def _tcs_get_tokens() -> tuple:
+def _tcs_get_tokens(env=None) -> tuple:
     """Returns (bearer_token, ecom_access_token), refreshing either when near expiry."""
+    env = env or TCS_ENV
     with _tcs_lock:
+        _tcs_tokens = _tcs_tokens_by_env.setdefault(env, _blank_tokens())
         now = time.time()
         if TCS_BEARER_TOKEN:
             _tcs_tokens["bearer"] = TCS_BEARER_TOKEN
             _tcs_tokens["bearer_exp"] = float("inf")
         if not (_tcs_tokens["bearer"] and now < _tcs_tokens["bearer_exp"] - 300):
             r = requests.get(
-                f"{_tcs_base()}/auth/api/auth",
+                f"{_tcs_base(env)}/auth/api/auth",
                 params={"clientid": TCS_CLIENT_ID, "clientsecret": TCS_CLIENT_SECRET},
                 timeout=(10, 30),
             )
@@ -343,7 +347,7 @@ def _tcs_get_tokens() -> tuple:
             _tcs_tokens["ecom_exp"] = float("inf")
         if not (_tcs_tokens["ecom"] and now < _tcs_tokens["ecom_exp"] - 300):
             r = requests.get(
-                f"{_tcs_base()}/ecom/api/authentication/token",
+                f"{_tcs_base(env)}/ecom/api/authentication/token",
                 headers={"Authorization": f"Bearer {_tcs_tokens['bearer']}"},
                 params={"username": TCS_USERNAME, "password": TCS_PASSWORD},
                 timeout=(10, 30),
@@ -353,7 +357,7 @@ def _tcs_get_tokens() -> tuple:
             data = r.json() or {}
             if not data.get("accesstoken"):
                 raise RuntimeError("TCS e-com authentication returned no token (check username/password)")
-            _tcs_tokens["ecom"] = data["accesstoken"]
+            _tcs_tokens["ecom"] = urllib.parse.unquote(data["accesstoken"])  # TCS sends it URL-encoded
             _tcs_tokens["ecom_exp"] = _expiry_ts(data.get("expiry"))
             log.info("Fetched a TCS e-com access token (%s)", TCS_ENV)
         return _tcs_tokens["bearer"], _tcs_tokens["ecom"]
@@ -468,7 +472,7 @@ def _build_tcs_payload(order: dict, ecom_token: str) -> dict:
     }
 
 
-def book_tcs_shipment(order: dict) -> dict:
+def book_tcs_shipment(order: dict, env=None) -> dict:
     """Books a TCS shipment for one Shopify order -> {"tracking_number", "tracking_url", ...}.
     Without full TCS settings it only simulates (logged, never touches Shopify)."""
     if not TCS_CONFIGURED:
@@ -476,7 +480,7 @@ def book_tcs_shipment(order: dict) -> dict:
         log.warning("TCS settings incomplete - SIMULATING booking for order %s", order["id"])
         return {"tracking_number": fake_tracking, "tracking_url": "", "simulated": True}
 
-    bearer, ecom = _tcs_get_tokens()
+    bearer, ecom = _tcs_get_tokens(env)
     payload = _build_tcs_payload(order, ecom)
     resp = requests.post(
         f"{_tcs_base()}/ecom/api/booking/create",
@@ -490,7 +494,7 @@ def book_tcs_shipment(order: dict) -> dict:
         data = {}
     if resp.status_code == 401:
         with _tcs_lock:  # force fresh tokens on the next attempt
-            _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
+            _tcs_tokens_by_env.pop(env or TCS_ENV, None)
         raise RuntimeError(f"TCS rejected our token (401): {_tcs_reject_reason(resp)}")
     cn = data.get("consignmentNo")
     if not (data.get("status") is True and cn):
@@ -656,7 +660,7 @@ _labels_cache = {"at": 0.0, "map": {}}
 def _tcs_status_labels(env=None) -> dict:
     if time.time() - _labels_cache["at"] > 3600:
         try:
-            bearer, _ = _tcs_get_tokens()
+            bearer, _ = _tcs_get_tokens(env)
             r = requests.get(
                 f"{_tcs_base(env)}/ecom/setup/deliverystatuslist",
                 headers={"Authorization": f"Bearer {bearer}"}, timeout=(10, 30),
@@ -674,7 +678,7 @@ def _tcs_status_labels(env=None) -> dict:
 
 def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
     """All parcels booked between the two dates, fetched in 7-day slices."""
-    bearer, ecom = _tcs_get_tokens()
+    bearer, ecom = _tcs_get_tokens(env)
     if not (TCS_USERNAME and TCS_PASSWORD):
         raise RuntimeError("Add TCS_USERNAME and TCS_PASSWORD (your TCS/Envio API login) in Render - the report needs an E-COM access token")
     parcels = {}
@@ -694,7 +698,7 @@ def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
         )
         if r.status_code == 401:
             with _tcs_lock:
-                _tcs_tokens.update(bearer="", bearer_exp=0.0, ecom="", ecom_exp=0.0)
+                _tcs_tokens_by_env.pop(env or TCS_ENV, None)
             raise RuntimeError(f"TCS rejected the token (401): {_tcs_reject_reason(r)}")
         r.raise_for_status()
         for row in ((r.json() or {}).get("detail") or []):
