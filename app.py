@@ -348,7 +348,8 @@ def _tcs_get_tokens() -> tuple:
                 params={"username": TCS_USERNAME, "password": TCS_PASSWORD},
                 timeout=(10, 30),
             )
-            r.raise_for_status()
+            if r.status_code >= 400:  # never raise_for_status: its text contains the password URL
+                raise RuntimeError(f"TCS e-com login failed ({r.status_code}): {_tcs_reject_reason(r)}")
             data = r.json() or {}
             if not data.get("accesstoken"):
                 raise RuntimeError("TCS e-com authentication returned no token (check username/password)")
@@ -720,7 +721,7 @@ def _report_envs() -> list:
 
 
 def _fetch_parcels_any_env(d_from: date, d_to: date):
-    last = None
+    last, errors = None, []
     for env in _report_envs():
         try:
             rows = _fetch_tcs_parcels(d_from, d_to, env)
@@ -728,7 +729,8 @@ def _fetch_parcels_any_env(d_from: date, d_to: date):
             return rows, env
         except (RuntimeError, requests.HTTPError) as e:
             last = e
-    raise RuntimeError(f"{last} (tried: {', '.join(_report_envs())})")
+            errors.append(f"{env}: {str(e).split('?')[0][:200]}")
+    raise RuntimeError(" | ".join(errors))
 
 
 def _parse_dmy(text):
