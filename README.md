@@ -47,6 +47,8 @@ Optional: `TCS_CUSTOMER_NO` (report API customer number; defaults to `TCS_ACCOUN
 (default `O`), `TCS_SHIPPER_CITY_CODE`, `TCS_SHIPPER_ZIP`,
 `TCS_CONSIGNEE_MIDDLENAME` (default `N/A`), `TCS_ENV`.
 
+`TCS_REPORT_ENV` (optional, `production` or `sandbox`): the read-only report tries production then sandbox when a bearer token is used and remembers which one TCS accepts; set this to force one.
+
 **`TCS_ENV` defaults to sandbox.** Setting `TCS_ENV=production` makes the
 service book *real* shipments and fulfil orders — including every unfulfilled
 order from the last 3 days. Cancel test orders in Shopify first.

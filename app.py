@@ -295,8 +295,8 @@ def mark_order_fulfilled(order_id, tracking_number: str, tracking_url: str = "")
 # Implements TCS's "COD API User Guide v1.0": Authorization -> E-COM Authentication
 # -> Booking Create. Sandbox (devconnect) is the default; production (ociconnect)
 # only when TCS_ENV=production.
-def _tcs_base() -> str:
-    return ("https://ociconnect.tcscourier.com" if TCS_ENV == "production"
+def _tcs_base(env=None) -> str:
+    return ("https://ociconnect.tcscourier.com" if (env or TCS_ENV) == "production"
             else "https://devconnect.tcscourier.com")
 
 
@@ -637,12 +637,12 @@ STATUS_LABELS = {"OK": "Delivered", "RO": "Returned to origin", "SC": "Awaiting 
 _labels_cache = {"at": 0.0, "map": {}}
 
 
-def _tcs_status_labels() -> dict:
+def _tcs_status_labels(env=None) -> dict:
     if time.time() - _labels_cache["at"] > 3600:
         try:
             bearer, _ = _tcs_get_tokens()
             r = requests.get(
-                f"{_tcs_base()}/ecom/setup/deliverystatuslist",
+                f"{_tcs_base(env)}/ecom/setup/deliverystatuslist",
                 headers={"Authorization": f"Bearer {bearer}"}, timeout=(10, 30),
             )
             r.raise_for_status()
@@ -656,7 +656,7 @@ def _tcs_status_labels() -> dict:
     return {**_labels_cache["map"], **STATUS_LABELS}
 
 
-def _fetch_tcs_parcels(d_from: date, d_to: date) -> list:
+def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
     """All parcels booked between the two dates, fetched in 7-day slices."""
     bearer, ecom = _tcs_get_tokens()
     parcels = {}
@@ -664,7 +664,7 @@ def _fetch_tcs_parcels(d_from: date, d_to: date) -> list:
     while cur <= d_to:
         end = min(cur + timedelta(days=6), d_to)
         r = requests.get(
-            f"{_tcs_base()}/ecom/api/Payment/detail",
+            f"{_tcs_base(env)}/ecom/api/Payment/detail",
             headers={"Authorization": f"Bearer {bearer}"},
             json={
                 "accesstoken": ecom,
@@ -687,6 +687,33 @@ def _fetch_tcs_parcels(d_from: date, d_to: date) -> list:
     return list(parcels.values())
 
 
+TCS_REPORT_ENV = os.environ.get("TCS_REPORT_ENV", "").strip().lower()
+_report_env = {"ok": None}
+
+
+def _report_envs() -> list:
+    """Reading a report is harmless, so unlike booking it may use live data.
+    With a ready-made bearer token we try production, then sandbox, and remember
+    which one TCS accepts."""
+    if TCS_REPORT_ENV:
+        return [TCS_REPORT_ENV]
+    if TCS_BEARER_TOKEN:
+        return [_report_env["ok"]] if _report_env["ok"] else ["production", "sandbox"]
+    return [TCS_ENV]
+
+
+def _fetch_parcels_any_env(d_from: date, d_to: date):
+    last = None
+    for env in _report_envs():
+        try:
+            rows = _fetch_tcs_parcels(d_from, d_to, env)
+            _report_env["ok"] = env
+            return rows, env
+        except (RuntimeError, requests.HTTPError) as e:
+            last = e
+    raise RuntimeError(f"{last} (tried: {', '.join(_report_envs())})")
+
+
 def _parse_dmy(text):
     try:
         return datetime.strptime(str(text), "%d/%m/%Y").date()
@@ -695,8 +722,8 @@ def _parse_dmy(text):
 
 
 def _build_report(d_from: date, d_to: date) -> dict:
-    rows = _fetch_tcs_parcels(d_from, d_to)
-    labels = _tcs_status_labels()
+    rows, used_env = _fetch_parcels_any_env(d_from, d_to)
+    labels = _tcs_status_labels(used_env)
     status_totals = Counter()
     by_date = {}
     parcels = []
@@ -721,7 +748,7 @@ def _build_report(d_from: date, d_to: date) -> dict:
         })
     parcels.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
     return {
-        "from": d_from.isoformat(), "to": d_to.isoformat(), "env": TCS_ENV,
+        "from": d_from.isoformat(), "to": d_to.isoformat(), "env": used_env,
         "total": len(rows), "delivery_charges": round(charges, 2), "amount_paid": round(paid, 2),
         "status_totals": dict(status_totals.most_common()),
         "by_date": {
