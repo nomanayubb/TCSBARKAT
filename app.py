@@ -792,6 +792,14 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     except Exception as e:
         log.warning("Payment Detail unavailable (%s) - using CN tracking", str(e)[:80])
         rows, used_env = _fetch_via_tracking(d_from, d_to, extra), "connect (tracking)"
+    if rows and "tracking" not in used_env:  # live tracking status is more complete than the ledger code
+        from concurrent.futures import ThreadPoolExecutor
+        with ThreadPoolExecutor(6) as ex:
+            live = list(ex.map(_track_one, [str(r.get("cn by courier")) for r in rows]))
+        for r, t in zip(rows, live):
+            if t:
+                r["cn status"] = t["cn status"]
+                r["delivery date"] = t["delivery date"] or r.get("delivery date")
     labels = _tcs_status_labels("connect")
     status_totals = Counter()
     by_date = {}
