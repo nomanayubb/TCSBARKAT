@@ -740,9 +740,55 @@ def _parse_dmy(text):
         return None
 
 
-def _build_report(d_from: date, d_to: date) -> dict:
-    rows, used_env = _fetch_parcels_any_env(d_from, d_to)
-    labels = _tcs_status_labels(used_env)
+def _load_cns(extra: str = "") -> list:
+    """CN numbers to report on: cns.txt in the repo plus any given in the URL (&cn=1,2)."""
+    out = []
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "cns.txt")) as f:
+            out += [ln.strip() for ln in f if ln.strip() and not ln.startswith("#")]
+    except OSError:
+        pass
+    out += re.findall(r"\d{9,14}", extra or "")
+    return list(dict.fromkeys(out))
+
+
+def _track_one(cn: str):
+    try:
+        r = requests.get(
+            f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
+            headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
+            params={"consignee": cn}, timeout=(10, 30))
+        d = r.json() or {}
+        info = (d.get("shipmentinfo") or [None])[0]
+        if not info:
+            return None
+        summ = str(d.get("shipmentsummary") or "")
+        m = re.search(r"Current Status:\s*(.+)", summ)
+        booked = datetime.strptime(info.get("bookingdate"), "%b %d, %Y").strftime("%d/%m/%Y")
+        delivered = re.search(r"Delivered On:\s*\S+\s+(\w+ \d+, \d{4})", summ)
+        return {"cn by courier": cn, "booking date": booked,
+                "cn status": (m.group(1).strip().title() if m else "In Transit"),
+                "delivery date": delivered.group(1) if delivered else None,
+                "city": info.get("destination"), "order no": "", "delivery charges": 0, "amount paid": 0}
+    except Exception:
+        log.exception("Tracking failed for %s", cn)
+        return None
+
+
+def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
+    from concurrent.futures import ThreadPoolExecutor
+    with ThreadPoolExecutor(6) as ex:
+        rows = [r for r in ex.map(_track_one, _load_cns(extra)) if r]
+    return [r for r in rows if (b := _parse_dmy(r["booking date"])) and d_from <= b <= d_to]
+
+
+def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
+    try:
+        rows, used_env = _fetch_parcels_any_env(d_from, d_to)
+    except Exception as e:
+        log.warning("Payment Detail unavailable (%s) - using CN tracking", str(e)[:80])
+        rows, used_env = _fetch_via_tracking(d_from, d_to, extra), "connect (tracking)"
+    labels = _tcs_status_labels("connect")
     status_totals = Counter()
     by_date = {}
     parcels = []
@@ -859,7 +905,7 @@ def report():
         d_from = d_to - timedelta(days=92)  # keep the number of TCS calls reasonable
 
     try:
-        rep = _build_report(d_from, d_to)
+        rep = _build_report(d_from, d_to, request.args.get('cn', ''))
     except Exception as e:
         log.exception("Report failed")
         return f"Could not load the report from TCS: {type(e).__name__}: {str(e)[:200]}", 502
