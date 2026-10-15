@@ -810,16 +810,33 @@ def _track_one_uncached(cn: str):
         return None
 
 
+_order_products = {}  # order name -> "Product x 2 + Other x 1", filled whenever orders are read
+
+
+def _shopify_orders_since(since_iso: str, fields: str, max_orders: int = 1500) -> list:
+    """All orders created since a moment, following Shopify's pages (250 each)."""
+    out, url = [], f"{SHOPIFY_BASE}/orders.json"
+    params = {"status": "any", "limit": 250, "created_at_min": since_iso, "fields": fields}
+    while url and len(out) < max_orders:
+        r = requests.get(url, headers=shopify_headers(), params=params, timeout=(10, 30))
+        r.raise_for_status()
+        out += r.json().get("orders", [])
+        url = r.links.get("next", {}).get("url")
+        params = None  # the next-page link already carries them
+    for o in out:
+        if o.get("name") and o.get("line_items") is not None:
+            _order_products[o["name"]] = " + ".join(
+                f"{li.get('title')} x {li.get('quantity')}" for li in o["line_items"])
+    return out
+
+
 def _fetch_by_shopify_orders(d_from: date, d_to: date) -> list:
     """TCS tracking accepts our order reference (#000...), so every Shopify order
     that was booked with TCS is found without knowing its CN."""
     from concurrent.futures import ThreadPoolExecutor
-    since = (datetime.combine(d_from, datetime.min.time()) - timedelta(days=3)).isoformat() + "Z"
-    r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
-                     params={"status": "any", "limit": 250, "created_at_min": since, "fields": "name"},
-                     timeout=(10, 30))
-    r.raise_for_status()
-    names = [o["name"] for o in r.json().get("orders", []) if o.get("name")]
+    since = (datetime.combine(d_from, datetime.min.time()) - timedelta(days=14)).isoformat() + "Z"
+    orders = _shopify_orders_since(since, "name,line_items")
+    names = [o["name"] for o in orders if o.get("name")]
     with ThreadPoolExecutor(8) as ex:
         rows = [x for x in ex.map(_track_one, names) if x]
     return [x for x in rows if (b := _parse_dmy(x["booking date"])) and d_from <= b <= d_to]
@@ -871,6 +888,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
         parcels.append({
             "cn": r.get("cn by courier"), "booked": key, "delivered_on": r.get("delivery date"),
             "status": label, "code": code, "city": r.get("city"), "order": r.get("order no"),
+            "product": _order_products.get(str(r.get("order no") or ""), ""),
             "weight": r.get("parcel weight"), "amount_paid": r.get("amount paid"),
             "charges": r.get("delivery charges"),
         })
@@ -904,9 +922,9 @@ def _report_html(rep: dict, key: str) -> str:
     )
     parcel_rows = "".join(
         "<tr>" + "".join(f"<td>{esc(str(p[k]) if p[k] is not None else '')}</td>" for k in
-                         ("cn", "booked", "delivered_on", "status", "city", "order",
+                         ("cn", "booked", "delivered_on", "status", "city", "order", "product",
                           "weight", "amount_paid", "charges")) + "</tr>"
-        for p in rep["parcels"][:500]
+        for p in rep["parcels"]
     )
     return (
         "<!doctype html><meta charset='utf-8'>"
@@ -932,7 +950,7 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
         f"<h3>All parcels (latest {min(500, len(rep['parcels']))})</h3><div class='w'><table>"
         "<tr><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
-        "<th>Order</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
+        "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
         f"{parcel_rows}</table></div>"
     )
 
