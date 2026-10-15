@@ -994,6 +994,22 @@ def track_page():
                 for label, k in (("CN", "consignmentno"), ("Order ref", "referenceno"),
                                  ("Booked", "bookingdate"), ("From", "origin"),
                                  ("To", "destination"), ("Consignee", "consignee")))
+            items = ""
+            ref = str(info.get("referenceno") or "").strip()
+            if ref.startswith("#"):
+                try:  # product names are not in TCS tracking - read them from the Shopify order
+                    sr = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
+                                      params={"status": "any", "name": ref, "fields": "name,line_items"},
+                                      timeout=(10, 30))
+                    for o in sr.json().get("orders", []):
+                        if o.get("name") == ref:
+                            items = "".join(f"<li>{esc(str(li.get('title') or ''))}"
+                                            f"{' - ' + esc(str(li['variant_title'])) if li.get('variant_title') else ''}"
+                                            f" x {li.get('quantity')}</li>" for li in o.get("line_items", []))
+                except Exception:
+                    log.exception("Could not load products for %s", ref)
+            if items:
+                rows += f"<tr><th>Products</th><td><ul style='margin:0;padding-left:18px'>{items}</ul></td></tr>"
             summ = esc(str(d.get("shipmentsummary") or "")).replace(chr(10), "<br>")
             steps = "".join(
                 f"<tr><td>{esc(str(c.get('datetime') or ''))}</td><td>{esc(str(c.get('status') or ''))}</td>"
