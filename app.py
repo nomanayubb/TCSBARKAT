@@ -778,6 +778,8 @@ def _track_one_uncached(cn: str):
         info = (d.get("shipmentinfo") or [None])[0]
         if not info:
             return None
+        if cn.startswith("#") and str(info.get("referenceno") or "").strip() != cn:
+            return None  # TCS returned a parcel with a different reference - not ours
         summ = str(d.get("shipmentsummary") or "")
         m = re.search(r"Current Status:\s*(.+)", summ)
         booked = datetime.strptime(info.get("bookingdate"), "%b %d, %Y").strftime("%d/%m/%Y")
@@ -957,6 +959,62 @@ def report():
     if request.path.endswith(".json"):
         return jsonify(rep), 200
     return _report_html(rep, request.args.get("key", "")), 200
+
+
+@app.route("/track", methods=["GET"])
+def track_page():
+    """Type a CN or an order number (like #00011063) and see the full TCS tracking."""
+    if not ORDERS_PAGE_KEY:
+        return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
+    key = request.args.get("key", "")
+    if not hmac.compare_digest(key, ORDERS_PAGE_KEY):
+        abort(401)
+    esc = html.escape
+    q = request.args.get("q", "").strip()
+    out = ""
+    if q:
+        try:
+            r = requests.get(
+                f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
+                headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
+                params={"consignee": q}, timeout=(10, 30))
+            d = r.json() or {}
+        except Exception as e:
+            d = {}
+            out = f"<p>Could not reach TCS ({esc(type(e).__name__)}).</p>"
+        info = (d.get("shipmentinfo") or [None])[0]
+        if info:
+            warn = ""
+            if q.startswith("#") and str(info.get("referenceno") or "").strip() != q:
+                warn = "<p style='color:#b00'>Warning: this parcel has a different reference than you typed.</p>"
+            elif q.isdigit() and len(q) < 11:
+                warn = "<p style='color:#b00'>Short numbers can match another customer's parcel - use the full CN or #00011063.</p>"
+            rows = "".join(
+                f"<tr><th>{esc(label)}</th><td>{esc(str(info.get(k) or ''))}</td></tr>"
+                for label, k in (("CN", "consignmentno"), ("Order ref", "referenceno"),
+                                 ("Booked", "bookingdate"), ("From", "origin"),
+                                 ("To", "destination"), ("Consignee", "consignee")))
+            summ = esc(str(d.get("shipmentsummary") or "")).replace(chr(10), "<br>")
+            steps = "".join(
+                f"<tr><td>{esc(str(c.get('datetime') or ''))}</td><td>{esc(str(c.get('status') or ''))}</td>"
+                f"<td>{esc(str(c.get('recievedby') or ''))}</td></tr>"
+                for c in (d.get("checkpoints") or []))
+            out = (warn + f"<table>{rows}</table><p><b>{summ}</b></p>"
+                   "<h3>History</h3><table><tr><th>When</th><th>Status</th><th>Place / person</th></tr>"
+                   f"{steps}</table>")
+        elif not out:
+            out = "<p>No parcel found for that number.</p>"
+    return (
+        "<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+        "<title>Track a parcel</title>"
+        "<style>body{font-family:system-ui,sans-serif;margin:16px;max-width:760px}"
+        "input[type=text]{padding:8px;width:min(340px,70vw);font-size:16px}button{padding:8px 14px;font-size:16px}"
+        "table{border-collapse:collapse;margin:8px 0}th,td{border:1px solid #ccc;padding:5px 10px;text-align:left}</style>"
+        "<h2>Track a parcel</h2>"
+        f"<form><input type='hidden' name='key' value='{esc(key)}'>"
+        f"<input type='text' name='q' value='{esc(q)}' placeholder='CN or order no, e.g. #00011063' autofocus> "
+        "<button>Track</button></form>" + out
+    ), 200
 
 
 @app.route("/status", methods=["GET"])
