@@ -830,16 +830,27 @@ def _shopify_orders_since(since_iso: str, fields: str, max_orders: int = 1500) -
     return out
 
 
-def _fetch_by_shopify_orders(d_from: date, d_to: date) -> list:
+def _fetch_by_shopify_orders(d_from: date, d_to: date) -> tuple:
     """TCS tracking accepts our order reference (#000...), so every Shopify order
     that was booked with TCS is found without knowing its CN."""
     from concurrent.futures import ThreadPoolExecutor
     since = (datetime.combine(d_from, datetime.min.time()) - timedelta(days=14)).isoformat() + "Z"
-    orders = _shopify_orders_since(since, "name,line_items")
-    names = [o["name"] for o in orders if o.get("name")]
+    orders = _shopify_orders_since(
+        since, "name,line_items,created_at,fulfillment_status,cancelled_at,total_price")
+    orders = [o for o in orders if o.get("name")]
     with ThreadPoolExecutor(8) as ex:
-        rows = [x for x in ex.map(_track_one, names) if x]
-    return [x for x in rows if (b := _parse_dmy(x["booking date"])) and d_from <= b <= d_to]
+        tracked = list(ex.map(_track_one, [o["name"] for o in orders]))
+    rows = [x for x in tracked if x]
+    unbooked = []
+    for o, t in zip(orders, tracked):
+        created = str(o.get("created_at") or "")[:10]
+        if not t and not o.get("cancelled_at") and d_from.isoformat() <= created <= d_to.isoformat():
+            unbooked.append({"order": o["name"], "created": created,
+                             "fulfillment": o.get("fulfillment_status") or "unfulfilled",
+                             "product": _order_products.get(o["name"], ""),
+                             "total": o.get("total_price")})
+    rows = [x for x in rows if (b := _parse_dmy(x["booking date"])) and d_from <= b <= d_to]
+    return rows, sorted(unbooked, key=lambda u: u["order"], reverse=True)
 
 
 def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
@@ -855,9 +866,11 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     except Exception as e:
         log.warning("Payment Detail unavailable (%s) - using CN tracking", str(e)[:80])
         rows, used_env = _fetch_via_tracking(d_from, d_to, extra), "connect (tracking)"
+    unbooked = []
     try:  # add parcels the ledger doesn't list yet, found through the Shopify order numbers
         have = {str(x.get("cn by courier")) for x in rows}
-        rows = rows + [x for x in _fetch_by_shopify_orders(d_from, d_to) if str(x["cn by courier"]) not in have]
+        extra, unbooked = _fetch_by_shopify_orders(d_from, d_to)
+        rows = rows + [x for x in extra if str(x["cn by courier"]) not in have]
     except Exception:
         log.exception("Shopify order lookup for the report failed")
     if rows and "tracking" not in used_env:  # live tracking status is more complete than the ledger code
@@ -902,6 +915,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
             for k, v in sorted(by_date.items(), reverse=True)
         },
         "parcels": parcels,
+        "unbooked": unbooked,
     }
 
 
@@ -948,10 +962,16 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div>"
         "<h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
-        f"<h3>All parcels (latest {min(500, len(rep['parcels']))})</h3><div class='w'><table>"
+        f"<h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table>"
         "<tr><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
         f"{parcel_rows}</table></div>"
+        f"<h3>Not booked at TCS ({len(rep.get('unbooked', []))})</h3><div class='w'><table>"
+        "<tr><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
+        + "".join("<tr>" + "".join(f"<td>{esc(str(u[k] if u[k] is not None else ''))}</td>" for k in
+                                   ("order", "created", "fulfillment", "product", "total")) + "</tr>"
+                  for u in rep.get("unbooked", []))
+        + "</table></div>"
     )
 
 
