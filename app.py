@@ -781,12 +781,28 @@ def _track_one_uncached(cn: str):
         if cn.startswith("#") and str(info.get("referenceno") or "").strip() != cn:
             return None  # TCS returned a parcel with a different reference - not ours
         summ = str(d.get("shipmentsummary") or "")
-        m = re.search(r"Current Status:\s*(.+)", summ)
         booked = datetime.strptime(info.get("bookingdate"), "%b %d, %Y").strftime("%d/%m/%Y")
         delivered = re.search(r"Delivered On:\s*\S+\s+(\w+ \d+, \d{4})", summ)
+        dinfo = d.get("deliveryinfo") or []
+        cps = d.get("checkpoints") or []
+        codes = [str(x.get("code") or "") for x in dinfo]
+        first = codes[0] if codes else ""
+        cp0 = cps[0] if cps else {}
+        cp_text = re.sub(r"\s*\(For Additional.*$", "", str(cp0.get("status") or "")).strip()
+        detail = str(dinfo[0].get("status") or "") if dinfo else cp_text
+        if first == "OK" or re.search(r"Current Status:\s*DELIVERED", summ, re.I):
+            state, label = "delivered", "Delivered"
+        elif first == "RO" or "returned to origin" in cp_text.lower():
+            state, label = "returned", "Returned to origin"
+        elif "RD" in codes:
+            state, label = "rejected", "Refused by receiver"
+        else:
+            state, label = "in_progress", "In Transit"
         return {"cn by courier": info.get("consignmentno") or cn, "booking date": booked,
                 "order no": cn if cn.startswith("#") else "",
-                "cn status": (m.group(1).strip().title() if m else "In Transit"),
+                "cn status": label, "state": state, "detail": detail or cp_text,
+                "reason": "refused by receiver" if "RD" in codes else "",
+                "last_event": cp_text, "last_time": str(cp0.get("datetime") or ""),
                 "delivery date": delivered.group(1) if delivered else None,
                 "city": info.get("destination"), "delivery charges": 0, "amount paid": 0}
     except Exception:
@@ -1031,6 +1047,164 @@ def track_page():
         f"<input type='text' name='q' value='{esc(q)}' placeholder='CN or order no, e.g. #00011063' autofocus> "
         "<button>Track</button></form>" + out
     ), 200
+
+
+
+# ------------------------------------------------ live product report
+PRODUCTS_DAYS = int(os.environ.get("PRODUCTS_REPORT_DAYS", "30"))
+PRODUCTS_REFRESH_SECONDS = int(os.environ.get("PRODUCTS_REFRESH_SECONDS", "60"))
+_products = {"data": None, "at": 0.0, "error": "", "started": False}
+
+
+def _classify(status_text: str) -> str:
+    t = (status_text or "").lower()
+    if "return" in t or "rto" in t:
+        return "returned"
+    if any(w in t for w in ("refus", "reject", "cancel", "undeliver", "not accept")):
+        return "rejected"
+    if "deliver" in t and "out for" not in t:
+        return "delivered"
+    return "in_progress"
+
+
+def _build_products() -> dict:
+    from concurrent.futures import ThreadPoolExecutor
+    since = (datetime.utcnow() - timedelta(days=PRODUCTS_DAYS)).isoformat() + "Z"
+    r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
+                     params={"status": "any", "limit": 250, "created_at_min": since,
+                             "fields": "name,created_at,line_items,cancelled_at"},
+                     timeout=(10, 30))
+    r.raise_for_status()
+    orders = [o for o in r.json().get("orders", []) if o.get("name") and not o.get("cancelled_at")]
+    with ThreadPoolExecutor(8) as ex:
+        tracked = list(ex.map(_track_one_uncached, [o["name"] for o in orders]))
+    prods = {}
+    totals = {"delivered": 0, "in_progress": 0, "returned": 0, "rejected": 0, "not_booked": 0}
+    for o, t in zip(orders, tracked):
+        state = t["state"] if t else "not_booked"
+        totals[state] += 1
+        for li in o.get("line_items", []):
+            title = str(li.get("title") or "?")
+            qty = int(li.get("quantity") or 1)
+            p = prods.setdefault(title, {"product": title, "units": 0, "delivered": 0, "in_progress": 0,
+                                         "returned": 0, "rejected": 0, "not_booked": 0,
+                                         "cities": {}, "parcels": []})
+            p["units"] += qty
+            p[state] += qty
+            if t:
+                city = t.get("city") or "?"
+                p["cities"][city] = p["cities"].get(city, 0) + qty
+            p["parcels"].append({
+                "order": o["name"], "cn": t["cn by courier"] if t else "", "qty": qty,
+                "city": (t or {}).get("city") or "",
+                "status": (t["cn status"] + (" - " + t["detail"] if t["detail"] and t["detail"] != t["cn status"] else "")) if t else "Not found at TCS",
+                "state": state, "booked": (t or {}).get("booking date") or "",
+                "last_event": (t or {}).get("last_event") or "",
+                "last_time": (t or {}).get("last_time") or "",
+            })
+    out = sorted(prods.values(), key=lambda p: -p["units"])
+    for p in out:
+        p["cities"] = dict(sorted(p["cities"].items(), key=lambda kv: -kv[1]))
+        p["parcels"].sort(key=lambda x: x["order"], reverse=True)
+    return {"products": out, "totals": totals, "orders": len(orders), "days": PRODUCTS_DAYS}
+
+
+def _products_refresh_loop():
+    while True:
+        try:
+            _products["data"] = _build_products()
+            _products["at"] = time.time()
+            _products["error"] = ""
+        except Exception as e:
+            log.exception("Product report refresh failed")
+            _products["error"] = f"{type(e).__name__}: {str(e).split('?')[0][:150]}"
+        time.sleep(PRODUCTS_REFRESH_SECONDS)
+
+
+def _ensure_products_thread():
+    with _tcs_lock:
+        if _products["started"]:
+            return
+        _products["started"] = True
+    threading.Thread(target=_products_refresh_loop, daemon=True, name="products").start()
+
+
+PRODUCTS_PAGE = """<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>
+<title>Product report</title>
+<style>
+body{font-family:system-ui,sans-serif;margin:16px;color:#222}
+h2{margin:0 0 4px}.sub{color:#666;font-size:13px;margin-bottom:12px}
+.cards{display:flex;flex-wrap:wrap;gap:8px;margin:10px 0}
+.card{border:1px solid #ddd;border-radius:8px;padding:8px 14px;min-width:96px}
+.card b{display:block;font-size:22px}
+.d{color:#12803c}.p{color:#b26a00}.r{color:#b3261e}.x{color:#7a1fa2}.n{color:#666}
+table{border-collapse:collapse;width:100%;margin:6px 0}th,td{border:1px solid #ddd;padding:5px 8px;text-align:left;font-size:14px}
+th{background:#f5f5f5}td.num{text-align:right}
+details{margin:2px 0}summary{cursor:pointer}
+@media (prefers-color-scheme:dark){body{background:#111;color:#eee}.card,th,td{border-color:#444}th{background:#222}.sub{color:#aaa}}
+</style>
+<h2>Product report</h2>
+<div class='sub' id='sub'>Loading... first load takes about 10 seconds</div>
+<div class='cards' id='cards'></div>
+<div id='list'></div>
+<script>
+var KEY = new URLSearchParams(location.search).get('key') || '';
+var opened = {}, last = null, lastAt = 0;
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function card(l,v,c){return "<div class='card'><span class='"+c+"'>"+l+"</span><b class='"+c+"'>"+v+"</b></div>"}
+function render(){
+  if(!last) return;
+  var t=last.totals, h='';
+  h+=card('Orders',last.orders,'n')+card('Delivered',t.delivered,'d')+card('In progress',t.in_progress,'p')+card('Returned',t.returned,'r')+card('Rejected',t.rejected,'x')+card('Not at TCS',t.not_booked,'n');
+  document.getElementById('cards').innerHTML=h;
+  var rows='<table><tr><th>Product</th><th>Units</th><th>Delivered</th><th>In progress</th><th>Returned</th><th>Rejected</th><th>Not at TCS</th><th>Going to</th></tr>';
+  last.products.forEach(function(p,i){
+    var keys=Object.keys(p.cities);
+    var cities=keys.slice(0,6).map(function(c){return esc(c)+' ('+p.cities[c]+')'}).join(', ')+(keys.length>6?' ...':'');
+    rows+="<tr><td><details data-i='"+i+"'"+(opened[p.product]?' open':'')+"><summary><b>"+esc(p.product)+"</b></summary>";
+    rows+="<table><tr><th>Order</th><th>CN</th><th>Qty</th><th>City</th><th>Status</th><th>Last event</th></tr>";
+    p.parcels.forEach(function(x){rows+="<tr><td>"+esc(x.order)+"</td><td>"+esc(x.cn)+"</td><td class='num'>"+x.qty+"</td><td>"+esc(x.city)+"</td><td>"+esc(x.status)+"</td><td>"+esc(x.last_event)+" "+esc(x.last_time)+"</td></tr>"});
+    rows+="</table></details></td><td class='num'>"+p.units+"</td><td class='num d'>"+p.delivered+"</td><td class='num p'>"+p.in_progress+"</td><td class='num r'>"+p.returned+"</td><td class='num x'>"+p.rejected+"</td><td class='num n'>"+p.not_booked+"</td><td>"+cities+"</td></tr>";
+  });
+  document.getElementById('list').innerHTML=rows+'</table>';
+  document.querySelectorAll('details').forEach(function(d){d.addEventListener('toggle',function(){var p=last.products[+d.getAttribute('data-i')];if(p)opened[p.product]=d.open})});
+}
+function load(){
+  fetch('/products.json?key='+encodeURIComponent(KEY),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){
+    if(d.products){
+      var changed=!last||JSON.stringify(d.products)!==JSON.stringify(last.products)||JSON.stringify(d.totals)!==JSON.stringify(last.totals);
+      last=d;lastAt=Date.now();if(changed)render();
+      document.getElementById('sub').textContent='Last '+d.days+' days. Page checked '+new Date().toLocaleTimeString()+'. TCS data is '+d.age+'s old (refreshed every '+d.refresh+'s)'+(d.error?'. Last refresh problem: '+d.error:'');
+    } else if(d.error){document.getElementById('sub').textContent='Error: '+d.error}
+  }).catch(function(){document.getElementById('sub').textContent='Connection problem, retrying...'});
+}
+load();setInterval(load,1000);
+</script>
+"""
+
+
+@app.route("/products", methods=["GET"])
+def products_page():
+    if not ORDERS_PAGE_KEY:
+        return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
+    if not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_products_thread()
+    return PRODUCTS_PAGE, 200
+
+
+@app.route("/products.json", methods=["GET"])
+def products_json():
+    if not ORDERS_PAGE_KEY:
+        return "Set ORDERS_PAGE_KEY in the Render environment to enable this page.", 404
+    if not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_products_thread()
+    data = _products["data"]
+    if not data:
+        return jsonify({"error": _products["error"], "loading": True}), 200
+    return jsonify(dict(data, age=int(time.time() - _products["at"]),
+                        refresh=PRODUCTS_REFRESH_SECONDS, error=_products["error"])), 200
 
 
 @app.route("/status", methods=["GET"])
