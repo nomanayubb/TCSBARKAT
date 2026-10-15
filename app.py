@@ -756,7 +756,19 @@ def _load_cns(extra: str = "") -> list:
     return list(dict.fromkeys(out))
 
 
+_track_cache = {}
+
+
 def _track_one(cn: str):
+    hit = _track_cache.get(cn)
+    if hit and time.time() - hit[0] < 300:
+        return hit[1]
+    row = _track_one_uncached(cn)
+    _track_cache[cn] = (time.time(), row)
+    return row
+
+
+def _track_one_uncached(cn: str):
     try:
         r = requests.get(
             f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
@@ -770,13 +782,29 @@ def _track_one(cn: str):
         m = re.search(r"Current Status:\s*(.+)", summ)
         booked = datetime.strptime(info.get("bookingdate"), "%b %d, %Y").strftime("%d/%m/%Y")
         delivered = re.search(r"Delivered On:\s*\S+\s+(\w+ \d+, \d{4})", summ)
-        return {"cn by courier": cn, "booking date": booked,
+        return {"cn by courier": info.get("consignmentno") or cn, "booking date": booked,
+                "order no": cn if cn.startswith("#") else "",
                 "cn status": (m.group(1).strip().title() if m else "In Transit"),
                 "delivery date": delivered.group(1) if delivered else None,
-                "city": info.get("destination"), "order no": "", "delivery charges": 0, "amount paid": 0}
+                "city": info.get("destination"), "delivery charges": 0, "amount paid": 0}
     except Exception:
         log.exception("Tracking failed for %s", cn)
         return None
+
+
+def _fetch_by_shopify_orders(d_from: date, d_to: date) -> list:
+    """TCS tracking accepts our order reference (#000...), so every Shopify order
+    that was booked with TCS is found without knowing its CN."""
+    from concurrent.futures import ThreadPoolExecutor
+    since = (datetime.combine(d_from, datetime.min.time()) - timedelta(days=3)).isoformat() + "Z"
+    r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
+                     params={"status": "any", "limit": 250, "created_at_min": since, "fields": "name"},
+                     timeout=(10, 30))
+    r.raise_for_status()
+    names = [o["name"] for o in r.json().get("orders", []) if o.get("name")]
+    with ThreadPoolExecutor(8) as ex:
+        rows = [x for x in ex.map(_track_one, names) if x]
+    return [x for x in rows if (b := _parse_dmy(x["booking date"])) and d_from <= b <= d_to]
 
 
 def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
@@ -792,6 +820,11 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     except Exception as e:
         log.warning("Payment Detail unavailable (%s) - using CN tracking", str(e)[:80])
         rows, used_env = _fetch_via_tracking(d_from, d_to, extra), "connect (tracking)"
+    try:  # add parcels the ledger doesn't list yet, found through the Shopify order numbers
+        have = {str(x.get("cn by courier")) for x in rows}
+        rows = rows + [x for x in _fetch_by_shopify_orders(d_from, d_to) if str(x["cn by courier"]) not in have]
+    except Exception:
+        log.exception("Shopify order lookup for the report failed")
     if rows and "tracking" not in used_env:  # live tracking status is more complete than the ledger code
         from concurrent.futures import ThreadPoolExecutor
         with ThreadPoolExecutor(6) as ex:
