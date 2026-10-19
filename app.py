@@ -846,6 +846,9 @@ def _fetch_by_shopify_orders(d_from: date, d_to: date) -> tuple:
     have_cn = {str(x["cn by courier"]) for x in rows}
     with ThreadPoolExecutor(8) as ex:
         cn_rows = [x for x in ex.map(_track_one, [c for c in _load_cns() if c not in have_cn]) if x]
+    shop_names = {o["name"] for o in orders}
+    for x in cn_rows:  # parcel whose reference is not one of our Shopify orders
+        x["non_shopify"] = str(x.get("order no") or "") not in shop_names
     rows += cn_rows
     by_cn_ref = {str(x.get("order no") or "") for x in cn_rows}
     unbooked = []
@@ -892,8 +895,16 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     status_totals = Counter()
     by_date = {}
     parcels = []
+    non_shopify = []
     charges = paid = 0.0
     for r in rows:
+        if r.get("non_shopify"):
+            non_shopify.append({
+                "cn": r.get("cn by courier"), "booked": (_parse_dmy(r.get("booking date")) or date.min).isoformat(),
+                "status": r.get("cn status"), "detail": r.get("detail") or "", "city": r.get("city"),
+                "reference": r.get("order no") or "", "last_event": r.get("last_event") or "",
+                "last_time": r.get("last_time") or ""})
+            continue
         code = str(r.get("cn status") or "?")
         label = labels.get(code, code)
         booked = _parse_dmy(r.get("booking date"))
@@ -923,6 +934,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
         },
         "parcels": parcels,
         "unbooked": unbooked,
+        "non_shopify": non_shopify,
     }
 
 
@@ -973,6 +985,12 @@ def _report_html(rep: dict, key: str) -> str:
         "<tr><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
         f"{parcel_rows}</table></div>"
+        f"<h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
+        "<tr><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th></tr>"
+        + "".join("<tr>" + "".join(f"<td>{esc(str(n[k] if n[k] is not None else ''))}</td>" for k in
+                                   ("cn", "booked", "status", "city", "reference", "last_event")) + "</tr>"
+                  for n in rep.get("non_shopify", []))
+        + "</table></div>"
         f"<h3>Not booked at TCS ({len(rep.get('unbooked', []))})</h3><div class='w'><table>"
         "<tr><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
         + "".join("<tr>" + "".join(f"<td>{esc(str(u[k] if u[k] is not None else ''))}</td>" for k in
