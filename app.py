@@ -799,7 +799,7 @@ def _track_one_uncached(cn: str):
         else:
             state, label = "in_progress", "In Transit"
         return {"cn by courier": info.get("consignmentno") or cn, "booking date": booked,
-                "order no": cn if cn.startswith("#") else "",
+                "order no": cn if cn.startswith("#") else str(info.get("referenceno") or ""),
                 "cn status": label, "state": state, "detail": detail or cp_text,
                 "reason": "refused by receiver" if "RD" in codes else "",
                 "last_event": cp_text, "last_time": str(cp0.get("datetime") or ""),
@@ -841,10 +841,17 @@ def _fetch_by_shopify_orders(d_from: date, d_to: date) -> tuple:
     with ThreadPoolExecutor(8) as ex:
         tracked = list(ex.map(_track_one, [o["name"] for o in orders]))
     rows = [x for x in tracked if x]
+    # TCS finds a parcel by reference only when the reference is numeric (#00011051),
+    # not for names like #barkat1090 - those are found through their CN (cns.txt).
+    have_cn = {str(x["cn by courier"]) for x in rows}
+    with ThreadPoolExecutor(8) as ex:
+        cn_rows = [x for x in ex.map(_track_one, [c for c in _load_cns() if c not in have_cn]) if x]
+    rows += cn_rows
+    by_cn_ref = {str(x.get("order no") or "") for x in cn_rows}
     unbooked = []
     for o, t in zip(orders, tracked):
         created = str(o.get("created_at") or "")[:10]
-        if not t and not o.get("cancelled_at") and d_from.isoformat() <= created <= d_to.isoformat():
+        if not t and o["name"] not in by_cn_ref and not o.get("cancelled_at") and d_from.isoformat() <= created <= d_to.isoformat():
             unbooked.append({"order": o["name"], "created": created,
                              "fulfillment": o.get("fulfillment_status") or "unfulfilled",
                              "product": _order_products.get(o["name"], ""),
