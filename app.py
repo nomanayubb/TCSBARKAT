@@ -753,6 +753,7 @@ def _load_cns(extra: str = "") -> list:
     except OSError:
         pass
     out += re.findall(r"\d{9,14}", extra or "")
+    out += list(_webhook_cns)
     return list(dict.fromkeys(out))
 
 
@@ -1268,6 +1269,38 @@ def products_json():
         return jsonify({"error": _products["error"], "loading": True}), 200
     return jsonify(dict(data, age=int(time.time() - _products["at"]),
                         refresh=PRODUCTS_REFRESH_SECONDS, error=_products["error"])), 200
+
+
+# ------------------------------------------------ TCS/Envio webhook receiver
+_webhook_cns = {}   # CN -> time received (kept in memory; also re-learned from every new event)
+_webhook_log = []   # last payloads (phone numbers masked), shown on /webhook-log
+
+
+def _mask(text: str) -> str:
+    return re.sub(r"(?<!\d)(?:\+?92|0)?3\d{9}(?!\d)", "<phone>", text)
+
+
+@app.route("/webhooks/tcs", methods=["GET", "POST"])
+def tcs_webhook():
+    """Envio/TCS calls this when a parcel is booked or its status changes.
+    URL to give Envio: /webhooks/tcs?key=ORDERS_PAGE_KEY"""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    raw = request.get_data(as_text=True)[:20000]
+    found = set(re.findall(r"(?<!\d)(\d{12})(?!\d)", raw))
+    for cn in found:
+        _webhook_cns.setdefault(cn, _now())
+    _webhook_log.append({"at": _now(), "method": request.method, "cns": sorted(found),
+                         "content_type": request.content_type, "body": _mask(raw)[:3000]})
+    del _webhook_log[:-30]
+    return {"ok": True, "cns": len(found)}, 200
+
+
+@app.route("/webhook-log", methods=["GET"])
+def webhook_log_page():
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    return jsonify({"known_cns": len(_webhook_cns), "events": _webhook_log[::-1]}), 200
 
 
 @app.route("/status", methods=["GET"])
