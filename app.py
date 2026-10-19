@@ -939,6 +939,23 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     }
 
 
+def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int) -> str:
+    """Table rows grouped by date: a heading row with the day's count, numbering restarts each day."""
+    out, cur, n, groups = [], None, 0, {}
+    for it in items:
+        groups[str(it.get(date_key) or "unknown")] = groups.get(str(it.get(date_key) or "unknown"), 0) + 1
+    for it in items:
+        day = str(it.get(date_key) or "unknown")
+        if day != cur:
+            cur, n = day, 0
+            out.append(f"<tr><td colspan='{ncols}' style='background:#eef;font-weight:bold'>"
+                       f"{esc(day)} - {groups[day]} parcels</td></tr>")
+        n += 1
+        out.append(f"<tr><td>{n}</td>" + "".join(
+            f"<td>{esc(str(it[k]) if it.get(k) is not None else '')}</td>" for k in keys) + "</tr>")
+    return "".join(out)
+
+
 def _report_html(rep: dict, key: str) -> str:
     esc = html.escape
     total = rep["total"] or 1
@@ -954,12 +971,9 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><td>{esc(s)}</td><td>{n}</td><td>{n * 100 / total:.1f}%</td></tr>"
         for s, n in rep["status_totals"].items()
     )
-    parcel_rows = "".join(
-        f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(p[k]) if p[k] is not None else '')}</td>" for k in
-                                      ("cn", "booked", "delivered_on", "status", "city", "order", "product",
-                                       "weight", "amount_paid", "charges")) + "</tr>"
-        for i, p in enumerate(rep["parcels"], 1)
-    )
+    parcel_rows = _grouped_rows(rep["parcels"], "booked",
+                                ("cn", "booked", "delivered_on", "status", "city", "order", "product",
+                                 "weight", "amount_paid", "charges"), esc, 11)
     date_rows += (f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
                   + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
     status_rows += f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
@@ -991,15 +1005,13 @@ def _report_html(rep: dict, key: str) -> str:
         f"{parcel_rows}</table></div>"
         f"<h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th></tr>"
-        + "".join(f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(n[k] if n[k] is not None else ''))}</td>" for k in
-                                                ("cn", "booked", "status", "city", "reference", "last_event")) + "</tr>"
-                  for i, n in enumerate(rep.get("non_shopify", []), 1))
+        + _grouped_rows(rep.get("non_shopify", []), "booked",
+                        ("cn", "booked", "status", "city", "reference", "last_event"), esc, 7)
         + "</table></div>"
         f"<h3>Not booked at TCS ({len(rep.get('unbooked', []))})</h3><div class='w'><table>"
         "<tr><th>#</th><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
-        + "".join(f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(u[k] if u[k] is not None else ''))}</td>" for k in
-                                                ("order", "created", "fulfillment", "product", "total")) + "</tr>"
-                  for i, u in enumerate(rep.get("unbooked", []), 1))
+        + _grouped_rows(rep.get("unbooked", []), "created",
+                        ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div>"
     )
 
