@@ -939,10 +939,13 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     }
 
 
-REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
+REPORT_EYE_JS = '<style>\nbutton.eye{border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:1px 8px}\nbutton.eye.on{background:#222;color:#fff}\ntr.det>td{background:#fafafa;padding:10px 16px}\ntr.det table{margin:6px 0}\n@media (prefers-color-scheme:dark){button.eye{background:#222;color:#eee}tr.det>td{background:#1b1b1b}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction show(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No tracking data from TCS yet\')+\'</i>\';\n  var h=\'<b>\'+esc(d.cn)+\'</b> &nbsp; \'+esc(d.reference||\'\')+\' &nbsp; \'+esc(d.origin||\'\')+\' &rarr; \'+esc(d.destination||\'\');\n  if(d.products) h+=\'<br>Products: \'+esc(d.products);\n  if(d.summary) h+=\'<br><b>\'+esc(d.summary)+\'</b>\';\n  if(d.delivery&&d.delivery.length){\n    h+=\'<table><tr><th>Delivery info</th><th>Station</th><th>When</th><th>Received by</th></tr>\';\n    d.delivery.forEach(function(x){h+=\'<tr><td>\'+esc(x.status)+\'</td><td>\'+esc(x.station)+\'</td><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.received_by)+\'</td></tr>\'});\n    h+=\'</table>\';\n  }\n  h+=\'<table><tr><th>When</th><th>Step</th><th>Place / person</th></tr>\';\n  (d.steps||[]).forEach(function(x){h+=\'<tr><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.status)+\'</td><td>\'+esc(x.by)+\'</td></tr>\'});\n  h+=\'</table><small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 30 seconds while open</small>\';\n  return h;\n}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.eye\'); if(!b) return;\n  var tr=b.closest(\'tr\');\n  if(tr._det){clearInterval(tr._iv);tr._det.remove();tr._det=null;b.classList.remove(\'on\');return}\n  var det=document.createElement(\'tr\'); det.className=\'det\';\n  var td=document.createElement(\'td\'); td.colSpan=tr.cells.length; td.textContent=\'Loading...\';\n  det.appendChild(td); tr.after(det); tr._det=det; b.classList.add(\'on\');\n  function load(){\n    fetch(\'/track.json?key=\'+encodeURIComponent(KEY)+\'&q=\'+encodeURIComponent(b.getAttribute(\'data-cn\')),{cache:\'no-store\'})\n      .then(function(r){return r.json()}).then(function(d){td.innerHTML=show(d)})\n      .catch(function(){td.textContent=\'Connection problem, retrying...\'});\n  }\n  load();\n  tr._iv=setInterval(function(){ if(!document.body.contains(det)){clearInterval(tr._iv);return} load(); },30000);\n});\n})();\n</script>\n'
 
 
-def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int) -> str:
+REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
+
+
+def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int, eye_key: str = "") -> str:
     """Table rows grouped by date: a heading row with the day's count, numbering restarts each day."""
     out, cur, n, groups = [], None, 0, {}
     for it in items:
@@ -955,7 +958,9 @@ def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int) -> s
                        f"{esc(day)} - {groups[day]} parcels</td></tr>")
         n += 1
         out.append(f"<tr data-day='{esc(day)}'><td>{n}</td>" + "".join(
-            f"<td>{esc(str(it[k]) if it.get(k) is not None else '')}</td>" for k in keys) + "</tr>")
+            f"<td>{esc(str(it[k]) if it.get(k) is not None else '')}</td>" for k in keys)
+            + (f"<td><button class='eye' title='Tracking history' data-cn='{esc(str(it.get(eye_key) or ''))}'>&#128065;</button></td>"
+               if eye_key else "") + "</tr>")
     return "".join(out)
 
 
@@ -976,7 +981,7 @@ def _report_html(rep: dict, key: str) -> str:
     )
     parcel_rows = _grouped_rows(rep["parcels"], "booked",
                                 ("cn", "booked", "delivered_on", "status", "city", "order", "product",
-                                 "weight", "amount_paid", "charges"), esc, 11)
+                                 "weight", "amount_paid", "charges"), esc, 12, eye_key="cn")
     date_rows += (f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
                   + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
     status_rows += f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
@@ -1006,19 +1011,19 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
         f"<h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
-        "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
+        "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th><th>Track</th></tr>"
         f"{parcel_rows}</table></div>"
         f"<h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
-        "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th></tr>"
+        "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th><th>Track</th></tr>"
         + _grouped_rows(rep.get("non_shopify", []), "booked",
-                        ("cn", "booked", "status", "city", "reference", "last_event"), esc, 7)
+                        ("cn", "booked", "status", "city", "reference", "last_event"), esc, 8, eye_key="cn")
         + "</table></div>"
         f"<h3>Not booked at TCS ({len(rep.get('unbooked', []))})</h3><div class='w'><table>"
         "<tr><th>#</th><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div>"
-        + REPORT_SORT_JS
+        + REPORT_SORT_JS + REPORT_EYE_JS
     )
 
 
@@ -1060,6 +1065,48 @@ def report():
     if request.path.endswith(".json"):
         return jsonify(rep), 200
     return _report_html(rep, request.args.get("key", "")), 200
+
+
+_track_json_cache = {}
+
+
+@app.route("/track.json", methods=["GET"])
+def track_json():
+    """Full TCS tracking for one CN or order reference, as JSON (used by the eye button)."""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    q = request.args.get("q", "").strip()[:60]
+    if not q:
+        return jsonify({"ok": False, "error": "No number given"}), 400
+    hit = _track_json_cache.get(q)
+    if hit and time.time() - hit[0] < 20:
+        return jsonify(hit[1]), 200
+    try:
+        r = requests.get(f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
+                         headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
+                         params={"consignee": q}, timeout=(10, 30))
+        d = r.json() or {}
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"Could not reach TCS ({type(e).__name__})"}), 502
+    info = (d.get("shipmentinfo") or [None])[0]
+    if not info:
+        out = {"ok": False, "error": "No tracking data from TCS yet"}
+    else:
+        ref = str(info.get("referenceno") or "")
+        summary = str(d.get("shipmentsummary") or "").split("\n")
+        out = {
+            "ok": True, "cn": info.get("consignmentno"), "reference": ref,
+            "origin": info.get("origin"), "destination": info.get("destination"),
+            "products": _order_products.get(ref, ""),
+            "summary": " ".join(x.strip() for x in summary[:2] if x.strip())[:160],
+            "delivery": [{"status": x.get("status"), "station": x.get("station"), "datetime": x.get("datetime"),
+                          "received_by": x.get("recievedby") or ""} for x in (d.get("deliveryinfo") or [])],
+            "steps": [{"datetime": c.get("datetime"), "by": c.get("recievedby") or "",
+                       "status": re.sub(r"\s*\(For Additional.*$", "", str(c.get("status") or ""))}
+                      for c in (d.get("checkpoints") or [])],
+        }
+    _track_json_cache[q] = (time.time(), out)
+    return jsonify(out), 200
 
 
 @app.route("/track", methods=["GET"])
