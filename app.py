@@ -926,7 +926,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     parcels.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
     return {
         "from": d_from.isoformat(), "to": d_to.isoformat(), "env": used_env,
-        "total": len(rows), "delivery_charges": round(charges, 2), "amount_paid": round(paid, 2),
+        "total": len(rows) - len(non_shopify), "delivery_charges": round(charges, 2), "amount_paid": round(paid, 2),
         "status_totals": dict(status_totals.most_common()),
         "by_date": {
             k: {"total": v["total"], "statuses": dict(v["statuses"]), "charges": round(v["charges"], 2)}
