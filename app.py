@@ -769,6 +769,29 @@ def _track_one(cn: str):
     return row
 
 
+_REASONS = {"RD": "REFUSED DELIVERY", "BA": "BAD ADDRESS", "NP": "NO SUCH CONSIGNEE",
+            "OH": "ON HOLD", "CN": "CONSIGNEE NOT AVAILABLE", "SC": "AWAITING COLLECTION"}
+
+
+def _fail_reason(entry: dict) -> str:
+    code = str(entry.get("code") or "")
+    return _REASONS.get(code) or str(entry.get("status") or "").upper()
+
+
+def _dmy_from_tcs(text) -> str:
+    """'Tuesday Oct 13, 2026 16:22' -> '13-10-2026'."""
+    m = re.search(r"([A-Za-z]{3}) (\d{1,2}), (\d{4})", str(text or ""))
+    if not m:
+        return ""
+    try:
+        return datetime.strptime(" ".join(m.groups()), "%b %d %Y").strftime("%d-%m-%Y")
+    except ValueError:
+        return ""
+
+
+_order_totals = {}  # order name -> Shopify total (the COD value)
+
+
 def _track_one_uncached(cn: str):
     try:
         r = requests.get(
@@ -793,16 +816,26 @@ def _track_one_uncached(cn: str):
         detail = str(dinfo[0].get("status") or "") if dinfo else cp_text
         if first == "OK" or re.search(r"Current Status:\s*DELIVERED", summ, re.I):
             state, label = "delivered", "Delivered"
+        elif first == "RS" or "RS" in codes:
+            state, label = "returned", "Returned to sender"
         elif first == "RO" or "returned to origin" in cp_text.lower():
-            state, label = "returned", "Returned to origin"
+            state, label = "returning", "Returning to origin"
         elif "RD" in codes:
             state, label = "rejected", "Refused by receiver"
         else:
             state, label = "in_progress", "In Transit"
+        tries = [x for x in dinfo if str(x.get("code") or "") not in ("RO", "RS")]
+        counted = [x for x in tries if str(x.get("code") or "") != "OH"]
+        rs = [x for x in dinfo if str(x.get("code") or "") == "RS"]
         return {"cn by courier": info.get("consignmentno") or cn, "booking date": booked,
                 "order no": cn if cn.startswith("#") else str(info.get("referenceno") or ""),
                 "cn status": label, "state": state, "detail": detail or cp_text,
-                "reason": "refused by receiver" if "RD" in codes else "",
+                "reason": _fail_reason(tries[0]) if tries else "",
+                "attempts": len(counted),
+                "first_attempt": _dmy_from_tcs(tries[-1].get("datetime")) if tries else "",
+                "last_attempt": _dmy_from_tcs(tries[0].get("datetime")) if tries else "",
+                "returned_on": _dmy_from_tcs(rs[0].get("datetime")) if rs else "",
+                "consignee": str(info.get("consignee") or ""),
                 "last_event": cp_text, "last_time": str(cp0.get("datetime") or ""),
                 "delivery date": delivered.group(1) if delivered else None,
                 "city": info.get("destination"), "delivery charges": 0, "amount paid": 0}
@@ -828,6 +861,8 @@ def _shopify_orders_since(since_iso: str, fields: str, max_orders: int = 1500) -
         if o.get("name") and o.get("line_items") is not None:
             _order_products[o["name"]] = " + ".join(
                 f"{li.get('title')} x {li.get('quantity')}" for li in o["line_items"])
+        if o.get("name") and o.get("total_price") is not None:
+            _order_totals[o["name"]] = o["total_price"]
     return out
 
 
@@ -890,8 +925,11 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
             live = list(ex.map(_track_one, [str(r.get("cn by courier")) for r in rows]))
         for r, t in zip(rows, live):
             if t:
-                r["cn status"] = t["cn status"]
+                for k in ("cn status", "state", "reason", "attempts", "first_attempt", "last_attempt",
+                          "returned_on", "consignee"):
+                    r[k] = t.get(k)
                 r["delivery date"] = t["delivery date"] or r.get("delivery date")
+                r["order no"] = r.get("order no") or t.get("order no")
     labels = _tcs_status_labels("connect")
     status_totals = Counter()
     by_date = {}
@@ -923,6 +961,11 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
             "product": _order_products.get(str(r.get("order no") or ""), ""),
             "weight": r.get("parcel weight"), "amount_paid": r.get("amount paid"),
             "charges": r.get("delivery charges"),
+            "state": r.get("state") or "", "reason": r.get("reason") or "",
+            "attempts": r.get("attempts"), "first_attempt": r.get("first_attempt") or "",
+            "last_attempt": r.get("last_attempt") or "", "returned_on": r.get("returned_on") or "",
+            "consignee": r.get("consignee") or "",
+            "cod": _order_totals.get(str(r.get("order no") or ""), ""),
         })
     parcels.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
     return {
@@ -934,6 +977,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
             for k, v in sorted(by_date.items(), reverse=True)
         },
         "parcels": parcels,
+        "returns": [p for p in parcels if p["state"] in ("returned", "returning")],
         "unbooked": unbooked,
         "non_shopify": non_shopify,
     }
@@ -962,6 +1006,26 @@ def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int, eye_
             + (f"<td><button class='eye' title='Tracking history' data-cn='{esc(str(it.get(eye_key) or ''))}'>&#128065;</button></td>"
                if eye_key else "") + "</tr>")
     return "".join(out)
+
+
+def _returns_html(rep: dict, esc) -> str:
+    rets = rep.get("returns", [])
+    final = [p for p in rets if p["state"] == "returned"]
+    by_reason = Counter(p["reason"] or "UNKNOWN" for p in final)
+    cod = sum(float(p["cod"]) for p in final if str(p.get("cod") or "").replace(".", "", 1).isdigit())
+    summary = (" | ".join(f"{esc(r)}: {n}" for r, n in by_reason.most_common()) or "none yet")
+    keys = ("booked", "order", "cn", "consignee", "city", "reason", "attempts", "first_attempt",
+            "last_attempt", "returned_on", "status", "cod", "product")
+    heads = ("Booked", "Order", "CN", "Consignee", "Destination", "Failed delivery reason", "Attempts",
+             "First attempt", "Last attempt", "Returned on", "Status", "COD value", "Product")
+    return (
+        f"<h3>Return Shipment Analysis ({len(rets)})</h3>"
+        f"<p>Back with you: <b>{len(final)}</b> (COD value {cod:,.0f}) &middot; still returning: "
+        f"<b>{len(rets) - len(final)}</b><br>Reasons: {summary}</p><div class='w'><table>"
+        "<tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "<th>Track</th></tr>"
+        + _grouped_rows(rets, "booked", keys, esc, len(keys) + 2, eye_key="cn")
+        + "</table></div>"
+    )
 
 
 def _report_html(rep: dict, key: str) -> str:
@@ -1009,6 +1073,7 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div>"
         "<h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
+        + _returns_html(rep, esc) +
         f"<h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th><th>Track</th></tr>"
@@ -1213,7 +1278,7 @@ def _build_products() -> dict:
     prods = {}
     totals = {"delivered": 0, "in_progress": 0, "returned": 0, "rejected": 0, "not_booked": 0}
     for o, t in zip(orders, tracked):
-        state = t["state"] if t else "not_booked"
+        state = ("returned" if t["state"] == "returning" else t["state"]) if t else "not_booked"
         totals[state] += 1
         for li in o.get("line_items", []):
             title = str(li.get("title") or "?")
