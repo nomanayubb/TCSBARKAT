@@ -939,6 +939,9 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     }
 
 
+REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}</style>\n<script>\n(function(){\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\ndocument.querySelectorAll(\'.w table\').forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  var dir={};\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var i=th.cellIndex, d=dir[i]===\'asc\'?\'desc\':\'asc\'; dir={}; dir[i]=d;\n    var rows=Array.prototype.filter.call(tb.rows,function(r,k){return k>0&&!r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')});\n    var tots=Array.prototype.filter.call(tb.rows,function(r){return r.classList.contains(\'tot\')});\n    rows.sort(function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c});\n    tb.querySelectorAll(\'.grp\').forEach(function(g){g.style.display=\'none\'});\n    var body=tb.tBodies[0]||tb; rows.forEach(function(r){body.appendChild(r)}); tots.forEach(function(r){body.appendChild(r)});\n    var nc=-1; Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼ ]/g,\'\')===\'#\')nc=k});\n    if(nc>=0) rows.forEach(function(r,k){r.cells[nc].textContent=k+1});\n    Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼ ]+$/,\'\')});\n    th.innerHTML=th.textContent+\' <span class="ar">\'+(d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    dir={}; from=null;\n  });\n});\n})();\n</script>\n'
+
+
 def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int) -> str:
     """Table rows grouped by date: a heading row with the day's count, numbering restarts each day."""
     out, cur, n, groups = [], None, 0, {}
@@ -948,7 +951,7 @@ def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int) -> s
         day = str(it.get(date_key) or "unknown")
         if day != cur:
             cur, n = day, 0
-            out.append(f"<tr><td colspan='{ncols}' style='background:#eef;font-weight:bold'>"
+            out.append(f"<tr class='grp'><td colspan='{ncols}' style='background:#eef;font-weight:bold'>"
                        f"{esc(day)} - {groups[day]} parcels</td></tr>")
         n += 1
         out.append(f"<tr><td>{n}</td>" + "".join(
@@ -974,9 +977,9 @@ def _report_html(rep: dict, key: str) -> str:
     parcel_rows = _grouped_rows(rep["parcels"], "booked",
                                 ("cn", "booked", "delivered_on", "status", "city", "order", "product",
                                  "weight", "amount_paid", "charges"), esc, 11)
-    date_rows += (f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
+    date_rows += (f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
                   + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
-    status_rows += f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
+    status_rows += f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
     return (
         "<!doctype html><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -1013,6 +1016,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div>"
+        + REPORT_SORT_JS
     )
 
 
