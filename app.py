@@ -817,7 +817,7 @@ def _track_one_uncached(cn: str):
         if first == "OK" or re.search(r"Current Status:\s*DELIVERED", summ, re.I):
             state, label = "delivered", "Delivered"
         elif first == "RS" or "RS" in codes:
-            state, label = "returned", "Returned to sender"
+            state, label = "returned", "Return to shipper"
         elif first == "RO" or "returned to origin" in cp_text.lower():
             state, label = "returning", "Returning to origin"
         elif "RD" in codes:
@@ -838,7 +838,7 @@ def _track_one_uncached(cn: str):
                 "consignee": str(info.get("consignee") or ""),
                 "last_event": cp_text, "last_time": str(cp0.get("datetime") or ""),
                 "delivery date": delivered.group(1) if delivered else None,
-                "city": info.get("destination"), "delivery charges": 0, "amount paid": 0}
+                "city": info.get("destination"), "origin": info.get("origin"), "delivery charges": 0, "amount paid": 0}
     except Exception:
         log.exception("Tracking failed for %s", cn)
         return None
@@ -983,10 +983,13 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     }
 
 
-REPORT_EYE_JS = '<style>\nbutton.eye{border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:1px 8px}\nbutton.eye.on{background:#222;color:#fff}\ntr.det>td{background:#fafafa;padding:10px 16px}\ntr.det table{margin:6px 0}\n@media (prefers-color-scheme:dark){button.eye{background:#222;color:#eee}tr.det>td{background:#1b1b1b}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction show(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No tracking data from TCS yet\')+\'</i>\';\n  var h=\'<b>\'+esc(d.cn)+\'</b> &nbsp; \'+esc(d.reference||\'\')+\' &nbsp; \'+esc(d.origin||\'\')+\' &rarr; \'+esc(d.destination||\'\');\n  if(d.products) h+=\'<br>Products: \'+esc(d.products);\n  if(d.summary) h+=\'<br><b>\'+esc(d.summary)+\'</b>\';\n  if(d.delivery&&d.delivery.length){\n    h+=\'<table><tr><th>Delivery info</th><th>Station</th><th>When</th><th>Received by</th></tr>\';\n    d.delivery.forEach(function(x){h+=\'<tr><td>\'+esc(x.status)+\'</td><td>\'+esc(x.station)+\'</td><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.received_by)+\'</td></tr>\'});\n    h+=\'</table>\';\n  }\n  h+=\'<table><tr><th>When</th><th>Step</th><th>Place / person</th></tr>\';\n  (d.steps||[]).forEach(function(x){h+=\'<tr><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.status)+\'</td><td>\'+esc(x.by)+\'</td></tr>\'});\n  h+=\'</table><small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 30 seconds while open</small>\';\n  return h;\n}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.eye\'); if(!b) return;\n  var tr=b.closest(\'tr\');\n  if(tr._det){clearInterval(tr._iv);tr._det.remove();tr._det=null;b.classList.remove(\'on\');return}\n  var det=document.createElement(\'tr\'); det.className=\'det\';\n  var td=document.createElement(\'td\'); td.colSpan=tr.cells.length; td.textContent=\'Loading...\';\n  det.appendChild(td); tr.after(det); tr._det=det; b.classList.add(\'on\');\n  function load(){\n    fetch(\'/track.json?key=\'+encodeURIComponent(KEY)+\'&q=\'+encodeURIComponent(b.getAttribute(\'data-cn\')),{cache:\'no-store\'})\n      .then(function(r){return r.json()}).then(function(d){td.innerHTML=show(d)})\n      .catch(function(){td.textContent=\'Connection problem, retrying...\'});\n  }\n  load();\n  tr._iv=setInterval(function(){ if(!document.body.contains(det)){clearInterval(tr._iv);return} load(); },30000);\n});\n})();\n</script>\n'
+REPORT_EYE_JS = '<style>\nbutton.eye{border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:1px 8px}\nbutton.eye.on{background:#222;color:#fff}\ntr.det>td{background:#fafafa;padding:10px 16px}\ntr.det table{margin:6px 0}\n@media (prefers-color-scheme:dark){button.eye{background:#222;color:#eee}tr.det>td{background:#1b1b1b}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction show(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No tracking data from TCS yet\')+\'</i>\';\n  var h=\'<b>\'+esc(d.cn)+\'</b> &nbsp; \'+esc(d.reference||\'\')+\' &nbsp; \'+esc(d.origin||\'\')+\' &rarr; \'+esc(d.destination||\'\');\n  if(d.products) h+=\'<br>Products: \'+esc(d.products);\n  if(d.summary) h+=\'<br><b>\'+esc(d.summary)+\'</b>\';\n  if(d.delivery&&d.delivery.length){\n    h+=\'<table><tr><th>Delivery info</th><th>Station</th><th>When</th><th>Received by</th></tr>\';\n    d.delivery.forEach(function(x){h+=\'<tr><td>\'+esc(x.status)+\'</td><td>\'+esc(x.station)+\'</td><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.received_by)+\'</td></tr>\'});\n    h+=\'</table>\';\n  }\n  h+=\'<table><tr><th>When</th><th>Step</th><th>Place / person</th></tr>\';\n  (d.steps||[]).forEach(function(x){h+=\'<tr><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.status)+\'</td><td>\'+esc(x.by)+\'</td></tr>\'});\n  h+=\'</table><small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 10 seconds while open</small>\';\n  return h;\n}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.eye\'); if(!b) return;\n  var tr=b.closest(\'tr\');\n  if(tr._det){clearInterval(tr._iv);tr._det.remove();tr._det=null;b.classList.remove(\'on\');return}\n  var det=document.createElement(\'tr\'); det.className=\'det\';\n  var td=document.createElement(\'td\'); td.colSpan=tr.cells.length; td.textContent=\'Loading...\';\n  det.appendChild(td); tr.after(det); tr._det=det; b.classList.add(\'on\');\n  function load(){\n    fetch(\'/track.json?key=\'+encodeURIComponent(KEY)+\'&q=\'+encodeURIComponent(b.getAttribute(\'data-cn\')),{cache:\'no-store\'})\n      .then(function(r){return r.json()}).then(function(d){td.innerHTML=show(d)})\n      .catch(function(){td.textContent=\'Connection problem, retrying...\'});\n  }\n  load();\n  tr._iv=setInterval(function(){ if(!document.body.contains(det)){clearInterval(tr._iv);return} load(); },10000);\n});\n})();\n</script>\n'
 
 
-REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
+REPORT_GLASSES_JS = '<style>\nbutton.gl{margin-left:6px;border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:0 6px}\nbutton.gl.on{background:#222;color:#fff}\ntr.gdet>td{background:#f6f9ff;padding:10px 16px}\ntr.gdet table{margin:6px 0}\ntr.gdet th{width:220px}\n@media (prefers-color-scheme:dark){button.gl{background:#222;color:#eee}tr.gdet>td{background:#18202b}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.gl\'); if(!b) return;\n  var tr=b.closest(\'tr\');\n  if(tr._gdet){clearInterval(tr._giv);tr._gdet.remove();tr._gdet=null;b.classList.remove(\'on\');return}\n  var det=document.createElement(\'tr\'); det.className=\'det gdet\';\n  var td=document.createElement(\'td\'); td.colSpan=tr.cells.length; td.textContent=\'Loading...\';\n  det.appendChild(td); (tr._det||tr).after(det); tr._gdet=det; b.classList.add(\'on\');\n  var sr=tr.cells[0]?tr.cells[0].textContent.trim():\'\';\n  function load(){\n    fetch(\'/return-detail.json?key=\'+encodeURIComponent(KEY)+\'&cn=\'+encodeURIComponent(b.getAttribute(\'data-cn\'))+\'&sr=\'+encodeURIComponent(sr),{cache:\'no-store\'})\n      .then(function(r){return r.json()}).then(function(d){\n        if(!d.ok){td.textContent=d.error||\'No data\';return}\n        var h=\'<table>\';\n        d.fields.forEach(function(f){h+=\'<tr><th>\'+esc(f[0])+\'</th><td>\'+esc(f[1])+\'</td></tr>\'});\n        td.innerHTML=h+\'</table><small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 10 seconds while open</small>\';\n      }).catch(function(){td.textContent=\'Connection problem, retrying...\'});\n  }\n  load();\n  tr._giv=setInterval(function(){ if(!document.body.contains(det)){clearInterval(tr._giv);return} load(); },10000);\n});\n})();\n</script>\n'
+
+
+REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
 
 
 def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int, eye_key: str = "") -> str:
@@ -1002,7 +1005,10 @@ def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int, eye_
                        f"{esc(day)} - {groups[day]} parcels</td></tr>")
         n += 1
         out.append(f"<tr data-day='{esc(day)}'><td>{n}</td>" + "".join(
-            f"<td>{esc(str(it[k]) if it.get(k) is not None else '')}</td>" for k in keys)
+            (f"<td>{esc(str(it[k]) if it.get(k) is not None else '')}"
+             + (f"<button class='gl' title='Return details' data-cn='{esc(str(it.get('cn') or ''))}'>&#128083;</button>"
+                if k == "status" and it.get("state") == "returned" else "") + "</td>")
+            for k in keys)
             + (f"<td><button class='eye' title='Tracking history' data-cn='{esc(str(it.get(eye_key) or ''))}'>&#128065;</button></td>"
                if eye_key else "") + "</tr>")
     return "".join(out)
@@ -1088,7 +1094,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div>"
-        + REPORT_SORT_JS + REPORT_EYE_JS
+        + REPORT_SORT_JS + REPORT_EYE_JS + REPORT_GLASSES_JS
     )
 
 
@@ -1135,6 +1141,62 @@ def report():
 _track_json_cache = {}
 
 
+_return_detail_cache = {}
+
+
+@app.route("/return-detail.json", methods=["GET"])
+def return_detail():
+    """The 21 columns of the portal's Return Shipment Analysis for one returned parcel."""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    cn = re.sub(r"\D", "", request.args.get("cn", ""))[:14]
+    sr = request.args.get("sr", "")[:6]
+    if not cn:
+        return jsonify({"ok": False, "error": "No CN"}), 400
+    hit = _return_detail_cache.get(cn)
+    if hit and time.time() - hit[0] < 8:
+        t, order = hit[1]
+    else:
+        t = _track_one_uncached(cn)
+        order = {}
+        if t and str(t.get("order no") or "").startswith("#"):
+            try:
+                r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(),
+                                 params={"status": "any", "name": t["order no"],
+                                         "fields": "name,total_price,email,phone,shipping_address"},
+                                 timeout=(10, 30))
+                order = next((o for o in r.json().get("orders", []) if o.get("name") == t["order no"]), {})
+            except Exception:
+                log.exception("Shopify lookup failed for return detail")
+        _return_detail_cache[cn] = (time.time(), (t, order))
+    if not t:
+        return jsonify({"ok": False, "error": "No tracking data from TCS yet"}), 200
+    ship = order.get("shipping_address") or {}
+    addr = ", ".join(x for x in (ship.get("address1"), ship.get("address2"), ship.get("city")) if x)
+    try:
+        cod = f"{int(float(order.get('total_price'))):,}"
+    except (TypeError, ValueError):
+        cod = ""
+    booked = _parse_dmy(t["booking date"])
+    final = t.get("state") == "returned"
+    fields = [
+        ("Sr#", sr), ("Booking Date", booked.strftime("%d-%m-%Y") if booked else ""),
+        ("COD Value", cod), ("Cash Received", ""), ("Consignee Address", addr),
+        ("Consignee Contact #", order.get("phone") or ship.get("phone") or ""),
+        ("Consignee Email", order.get("email") or ""), ("Consignee Name", t.get("consignee") or ""),
+        ("Consignment #", t["cn by courier"]), ("Delivery Date", t.get("returned_on") or ""),
+        ("Delivery Status", "Returned" if final else "Returning"),
+        ("Destination", t.get("city") or ""), ("Failed Delivery Reason", t.get("reason") or ""),
+        ("First Attempt Date", t.get("first_attempt") or ""), ("Last Attempt Date", t.get("last_attempt") or ""),
+        ("No of Attempts", t.get("attempts") if t.get("attempts") is not None else ""),
+        ("Order Reference #", t.get("order no") or ""), ("Origin", t.get("origin") or ""),
+        ("Status Code", "RS" if final else "RO"),
+        ("Status Description", "RETURN TO SHIPPER" if final else "RETURNING TO ORIGIN"),
+        ("Weight", "0.5"),
+    ]
+    return jsonify({"ok": True, "fields": [[k, str(v)] for k, v in fields]}), 200
+
+
 @app.route("/track.json", methods=["GET"])
 def track_json():
     """Full TCS tracking for one CN or order reference, as JSON (used by the eye button)."""
@@ -1144,7 +1206,7 @@ def track_json():
     if not q:
         return jsonify({"ok": False, "error": "No number given"}), 400
     hit = _track_json_cache.get(q)
-    if hit and time.time() - hit[0] < 20:
+    if hit and time.time() - hit[0] < 8:
         return jsonify(hit[1]), 200
     try:
         r = requests.get(f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
