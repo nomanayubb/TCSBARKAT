@@ -955,11 +955,14 @@ def _report_html(rep: dict, key: str) -> str:
         for s, n in rep["status_totals"].items()
     )
     parcel_rows = "".join(
-        "<tr>" + "".join(f"<td>{esc(str(p[k]) if p[k] is not None else '')}</td>" for k in
-                         ("cn", "booked", "delivered_on", "status", "city", "order", "product",
-                          "weight", "amount_paid", "charges")) + "</tr>"
-        for p in rep["parcels"]
+        f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(p[k]) if p[k] is not None else '')}</td>" for k in
+                                      ("cn", "booked", "delivered_on", "status", "city", "order", "product",
+                                       "weight", "amount_paid", "charges")) + "</tr>"
+        for i, p in enumerate(rep["parcels"], 1)
     )
+    date_rows += (f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
+                  + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
+    status_rows += f"<tr><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
     return (
         "<!doctype html><meta charset='utf-8'>"
         "<meta name='viewport' content='width=device-width,initial-scale=1'>"
@@ -983,20 +986,20 @@ def _report_html(rep: dict, key: str) -> str:
         "<h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div>"
         f"<h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table>"
-        "<tr><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
+        "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>COD paid</th><th>Charges</th></tr>"
         f"{parcel_rows}</table></div>"
         f"<h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
-        "<tr><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th></tr>"
-        + "".join("<tr>" + "".join(f"<td>{esc(str(n[k] if n[k] is not None else ''))}</td>" for k in
-                                   ("cn", "booked", "status", "city", "reference", "last_event")) + "</tr>"
-                  for n in rep.get("non_shopify", []))
+        "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th></tr>"
+        + "".join(f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(n[k] if n[k] is not None else ''))}</td>" for k in
+                                                ("cn", "booked", "status", "city", "reference", "last_event")) + "</tr>"
+                  for i, n in enumerate(rep.get("non_shopify", []), 1))
         + "</table></div>"
         f"<h3>Not booked at TCS ({len(rep.get('unbooked', []))})</h3><div class='w'><table>"
-        "<tr><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
-        + "".join("<tr>" + "".join(f"<td>{esc(str(u[k] if u[k] is not None else ''))}</td>" for k in
-                                   ("order", "created", "fulfillment", "product", "total")) + "</tr>"
-                  for u in rep.get("unbooked", []))
+        "<tr><th>#</th><th>Order</th><th>Placed</th><th>Shopify status</th><th>Product</th><th>Total</th></tr>"
+        + "".join(f"<tr><td>{i}</td>" + "".join(f"<td>{esc(str(u[k] if u[k] is not None else ''))}</td>" for k in
+                                                ("order", "created", "fulfillment", "product", "total")) + "</tr>"
+                  for i, u in enumerate(rep.get("unbooked", []), 1))
         + "</table></div>"
     )
 
@@ -1221,13 +1224,13 @@ function render(){
   var t=last.totals, h='';
   h+=card('Orders',last.orders,'n')+card('Delivered',t.delivered,'d')+card('In progress',t.in_progress,'p')+card('Returned',t.returned,'r')+card('Rejected',t.rejected,'x')+card('Not at TCS',t.not_booked,'n');
   document.getElementById('cards').innerHTML=h;
-  var rows='<table><tr><th>Product</th><th>Units</th><th>Delivered</th><th>In progress</th><th>Returned</th><th>Rejected</th><th>Not at TCS</th><th>Going to</th></tr>';
+  var rows='<table><tr><th>#</th><th>Product</th><th>Units</th><th>Delivered</th><th>In progress</th><th>Returned</th><th>Rejected</th><th>Not at TCS</th><th>Going to</th></tr>';
   last.products.forEach(function(p,i){
     var keys=Object.keys(p.cities);
     var cities=keys.slice(0,6).map(function(c){return esc(c)+' ('+p.cities[c]+')'}).join(', ')+(keys.length>6?' ...':'');
-    rows+="<tr><td><details data-i='"+i+"'"+(opened[p.product]?' open':'')+"><summary><b>"+esc(p.product)+"</b></summary>";
-    rows+="<table><tr><th>Order</th><th>CN</th><th>Qty</th><th>City</th><th>Status</th><th>Last event</th></tr>";
-    p.parcels.forEach(function(x){rows+="<tr><td>"+esc(x.order)+"</td><td>"+esc(x.cn)+"</td><td class='num'>"+x.qty+"</td><td>"+esc(x.city)+"</td><td>"+esc(x.status)+"</td><td>"+esc(x.last_event)+" "+esc(x.last_time)+"</td></tr>"});
+    rows+="<tr><td>"+(i+1)+"</td><td><details data-i='"+i+"'"+(opened[p.product]?' open':'')+"><summary><b>"+esc(p.product)+"</b></summary>";
+    rows+="<table><tr><th>#</th><th>Order</th><th>CN</th><th>Qty</th><th>City</th><th>Status</th><th>Last event</th></tr>";
+    p.parcels.forEach(function(x,j){rows+="<tr><td>"+(j+1)+"</td><td>"+esc(x.order)+"</td><td>"+esc(x.cn)+"</td><td class='num'>"+x.qty+"</td><td>"+esc(x.city)+"</td><td>"+esc(x.status)+"</td><td>"+esc(x.last_event)+" "+esc(x.last_time)+"</td></tr>"});
     rows+="</table></details></td><td class='num'>"+p.units+"</td><td class='num d'>"+p.delivered+"</td><td class='num p'>"+p.in_progress+"</td><td class='num r'>"+p.returned+"</td><td class='num x'>"+p.rejected+"</td><td class='num n'>"+p.not_booked+"</td><td>"+cities+"</td></tr>";
   });
   document.getElementById('list').innerHTML=rows+'</table>';
