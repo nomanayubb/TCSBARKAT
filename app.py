@@ -762,7 +762,7 @@ _track_cache = {}
 
 def _track_one(cn: str):
     hit = _track_cache.get(cn)
-    if hit and time.time() - hit[0] < 300:
+    if hit and time.time() - hit[0] < 15:
         return hit[1]
     row = _track_one_uncached(cn)
     _track_cache[cn] = (time.time(), row)
@@ -989,7 +989,10 @@ REPORT_EYE_JS = '<style>\nbutton.eye{border:1px solid #888;background:#fff;borde
 REPORT_GLASSES_JS = '<style>\nbutton.gl{margin-left:6px;border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:0 6px}\nbutton.gl.on{background:#222;color:#fff}\ntr.gdet>td{background:#f6f9ff;padding:10px 16px}\ntr.gdet table{margin:6px 0}\ntr.gdet th{width:220px}\n@media (prefers-color-scheme:dark){button.gl{background:#222;color:#eee}tr.gdet>td{background:#18202b}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.gl\'); if(!b) return;\n  var tr=b.closest(\'tr\');\n  if(tr._gdet){clearInterval(tr._giv);tr._gdet.remove();tr._gdet=null;b.classList.remove(\'on\');return}\n  var det=document.createElement(\'tr\'); det.className=\'det gdet\';\n  var td=document.createElement(\'td\'); td.colSpan=tr.cells.length; td.textContent=\'Loading...\';\n  det.appendChild(td); (tr._det||tr).after(det); tr._gdet=det; b.classList.add(\'on\');\n  var sr=tr.cells[0]?tr.cells[0].textContent.trim():\'\';\n  function load(){\n    fetch(\'/return-detail.json?key=\'+encodeURIComponent(KEY)+\'&cn=\'+encodeURIComponent(b.getAttribute(\'data-cn\'))+\'&sr=\'+encodeURIComponent(sr),{cache:\'no-store\'})\n      .then(function(r){return r.json()}).then(function(d){\n        if(!d.ok){td.textContent=d.error||\'No data\';return}\n        var h=\'<table>\';\n        d.fields.forEach(function(f){h+=\'<tr><th>\'+esc(f[0])+\'</th><td>\'+esc(f[1])+\'</td></tr>\'});\n        td.innerHTML=h+\'</table><small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 10 seconds while open</small>\';\n      }).catch(function(){td.textContent=\'Connection problem, retrying...\'});\n  }\n  load();\n  tr._giv=setInterval(function(){ if(!document.body.contains(det)){clearInterval(tr._giv);return} load(); },10000);\n});\n})();\n</script>\n'
 
 
-REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
+REPORT_LIVE_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'rettbl\'); if(!tb) return;\nvar sumEl=document.getElementById(\'retsum\'), last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction cell(name,p,n){\n  switch(name){\n    case \'#\': return n;\n    case \'Booked\': return esc(p.booked);\n    case \'Order\': return esc(p.order);\n    case \'CN\': return esc(p.cn);\n    case \'Consignee\': return esc(p.consignee);\n    case \'Destination\': return esc(p.city);\n    case \'Failed delivery reason\': return esc(p.reason);\n    case \'Attempts\': return esc(p.attempts);\n    case \'First attempt\': return esc(p.first_attempt);\n    case \'Last attempt\': return esc(p.last_attempt);\n    case \'Returned on\': return esc(p.returned_on);\n    case \'Status\': return esc(p.status)+(p.state===\'returned\'?"<button class=\'gl\' title=\'Return details\' data-cn=\'"+esc(p.cn)+"\'>&#128083;</button>":\'\');\n    case \'COD value\': return esc(p.cod);\n    case \'Product\': return esc(p.product);\n    case \'Track\': return "<button class=\'eye\' title=\'Tracking history\' data-cn=\'"+esc(p.cn)+"\'>&#128065;</button>";\n  }\n  return \'\';\n}\nfunction render(d){\n  var openGl={},openEye={};\n  Array.prototype.forEach.call(tb.rows,function(r){\n    var g=r.querySelector(\'button.gl.on\'),e=r.querySelector(\'button.eye.on\');\n    if(g)openGl[g.getAttribute(\'data-cn\')]=1; if(e)openEye[e.getAttribute(\'data-cn\')]=1;\n  });\n  var head=tb.rows[0], names=Array.prototype.map.call(head.cells,label);\n  var body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  var counts={}; d.returns.forEach(function(p){counts[p.booked]=(counts[p.booked]||0)+1});\n  var cur=null,n=0,k=1;\n  d.returns.forEach(function(p){\n    if(p.booked!==cur){\n      cur=p.booked;n=0;\n      var g=document.createElement(\'tr\'); g.className=\'grp\'; g.setAttribute(\'data-day\',cur);\n      g.innerHTML="<td colspan=\'"+names.length+"\' style=\'background:#eef;font-weight:bold\'>"+esc(cur)+" - "+counts[cur]+" parcels</td>";\n      g._ord=k++; body.appendChild(g);\n    }\n    n++;\n    var r=document.createElement(\'tr\'); r.setAttribute(\'data-day\',cur);\n    r.innerHTML=names.map(function(nm){return \'<td>\'+cell(nm,p,n)+\'</td>\'}).join(\'\');\n    r._ord=k++; body.appendChild(r);\n  });\n  if(window.__reportApply) window.__reportApply(tb);\n  tb.querySelectorAll(\'button.gl\').forEach(function(b){if(openGl[b.getAttribute(\'data-cn\')])b.click()});\n  tb.querySelectorAll(\'button.eye\').forEach(function(b){if(openEye[b.getAttribute(\'data-cn\')])b.click()});\n  if(sumEl){\n    var reasons=Object.keys(d.reasons).map(function(r){return esc(r)+\': \'+d.reasons[r]}).join(\' | \')||\'none yet\';\n    sumEl.innerHTML=\'Back with you: <b>\'+d.final+\'</b> (COD value \'+Math.round(d.cod).toLocaleString()+\') &middot; still returning: <b>\'+d.returning+\'</b><br>Reasons: \'+reasons+\'<br><small>Live &middot; TCS checked \'+d.age+\'s ago &middot; page refreshed \'+new Date().toLocaleTimeString()+\'</small>\';\n  }\n}\nfunction poll(){\n  fetch(\'/returns.json?key=\'+encodeURIComponent(KEY),{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n    if(!d.returns) return;\n    var sig=JSON.stringify(d.returns)+d.final+d.returning;\n    if(sig!==last){last=sig;render(d)} else if(sumEl){\n      sumEl.querySelector(\'small\')&&(sumEl.querySelector(\'small\').innerHTML=\'Live &middot; TCS checked \'+d.age+\'s ago &middot; page refreshed \'+new Date().toLocaleTimeString());\n    }\n  }).catch(function(){});\n}\npoll(); setInterval(poll,1000);\n})();\n</script>\n'
+
+
+REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\'});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));window.__reportApply=apply;\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
 
 
 def _grouped_rows(items: list, date_key: str, keys: tuple, esc, ncols: int, eye_key: str = "") -> str:
@@ -1026,8 +1029,8 @@ def _returns_html(rep: dict, esc) -> str:
              "First attempt", "Last attempt", "Returned on", "Status", "COD value", "Product")
     return (
         f"<h3>Return Shipment Analysis ({len(rets)})</h3>"
-        f"<p>Back with you: <b>{len(final)}</b> (COD value {cod:,.0f}) &middot; still returning: "
-        f"<b>{len(rets) - len(final)}</b><br>Reasons: {summary}</p><div class='w'><table>"
+        f"<p id='retsum'>Back with you: <b>{len(final)}</b> (COD value {cod:,.0f}) &middot; still returning: "
+        f"<b>{len(rets) - len(final)}</b><br>Reasons: {summary}</p><div class='w'><table id='rettbl'>"
         "<tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "<th>Track</th></tr>"
         + _grouped_rows(rets, "booked", keys, esc, len(keys) + 2, eye_key="cn")
         + "</table></div>"
@@ -1094,7 +1097,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div>"
-        + REPORT_SORT_JS + REPORT_EYE_JS + REPORT_GLASSES_JS
+        + REPORT_SORT_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS
     )
 
 
@@ -1128,6 +1131,7 @@ def report():
     if (d_to - d_from).days > 92:
         d_from = d_to - timedelta(days=92)  # keep the number of TCS calls reasonable
 
+    _ensure_live_thread()
     try:
         rep = _build_report(d_from, d_to, request.args.get('cn', ''))
     except Exception as e:
@@ -1142,6 +1146,59 @@ _track_json_cache = {}
 
 
 _return_detail_cache = {}
+
+
+# ------------------------------------------------ live returns (refreshed in the background)
+LIVE_REFRESH_SECONDS = int(os.environ.get("LIVE_REFRESH_SECONDS", "20"))
+LIVE_DAYS = int(os.environ.get("LIVE_REPORT_DAYS", "60"))
+_live = {"rep": None, "at": 0.0, "error": "", "started": False}
+
+
+def _live_loop():
+    while True:
+        try:
+            today = datetime.now(timezone(timedelta(hours=DISPLAY_UTC_OFFSET_HOURS))).date()
+            _live["rep"] = _build_report(today - timedelta(days=LIVE_DAYS), today)
+            _live["at"] = time.time()
+            _live["error"] = ""
+        except Exception as e:
+            log.exception("Live returns refresh failed")
+            _live["error"] = f"{type(e).__name__}: {str(e).split('?')[0][:150]}"
+        time.sleep(LIVE_REFRESH_SECONDS)
+
+
+def _ensure_live_thread():
+    with _tcs_lock:
+        if _live["started"]:
+            return
+        _live["started"] = True
+    threading.Thread(target=_live_loop, daemon=True, name="live-returns").start()
+
+
+@app.route("/returns.json", methods=["GET"])
+def returns_json():
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_live_thread()
+    rep = _live["rep"]
+    if not rep:
+        return jsonify({"loading": True, "error": _live["error"]}), 200
+    rets = rep.get("returns", [])
+    final = [p for p in rets if p["state"] == "returned"]
+    cod = 0.0
+    for p in final:
+        try:
+            cod += float(p.get("cod") or 0)
+        except (TypeError, ValueError):
+            pass
+    keep = ("booked", "order", "cn", "consignee", "city", "reason", "attempts", "first_attempt",
+            "last_attempt", "returned_on", "status", "state", "cod", "product")
+    return jsonify({
+        "returns": [{k: p.get(k) for k in keep} for p in rets],
+        "final": len(final), "returning": len(rets) - len(final), "cod": cod,
+        "reasons": dict(Counter(p["reason"] or "UNKNOWN" for p in final).most_common()),
+        "age": int(time.time() - _live["at"]), "error": _live["error"],
+    }), 200
 
 
 @app.route("/return-detail.json", methods=["GET"])
