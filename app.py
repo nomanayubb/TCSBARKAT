@@ -1437,6 +1437,9 @@ _EXPLORE = {  # read-only report calls from TCS's own swagger file (https://conn
     "shipmentweight": "/ecom/api/report/shipmentweight",
     "cnbulkinquiry": "/ecom/api/inquiry/cnbulkinquiry",
     "paymentinvoice": "/ecom/api/booking/paymentinvoice",
+    "paymentstatus": "/ecom/api/Payment/status",
+    "pendingtickets": "/ecom/api/shipperadvice/pendingtickets",
+    "costcenter": "/ecom/api/inquiry/costcenterinquiry",
 }
 
 
@@ -1453,6 +1456,11 @@ def tcs_explore():
         params = {"accesstoken": ecom}
         if ep == "paymentinvoice":
             params["invoicenumber"] = request.args.get("invoice", "")
+        elif ep == "paymentstatus":
+            params.update(customerno=request.args.get("customerno") or TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
+                          cnno=request.args.get("cn", ""))
+        elif ep in ("pendingtickets", "costcenter"):
+            params["customerno"] = request.args.get("customerno") or TCS_CUSTOMER_NO or TCS_ACCOUNT_NO
         else:
             params.update(customerno=request.args.get("customerno") or TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
                           fromdate=request.args.get("from", ""), todate=request.args.get("to", ""))
