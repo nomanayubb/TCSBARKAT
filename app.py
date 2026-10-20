@@ -1203,7 +1203,7 @@ def _pay_summary(payments: list) -> list:
         except ValueError:
             pday = v["PAYMENTDATE"]
         delivered = same + follow
-        out.append({"group": f"Paid on {pday}", "kind": "paid", "parcels": len(delivered), "orders": "".join(parts),
+        out.append({"group": f"Weekly report {w} (paid {pday})", "kind": "paid", "parcels": len(delivered), "orders": "".join(parts),
                     "products": "".join(pparts),
                     "cod": round(sum(r["cod"] for r in delivered), 2),
                     "gst_wh": round(sum(r["gst"] for r in delivered), 2), "it_wh": round(sum(r["itw"] for r in delivered), 2),
