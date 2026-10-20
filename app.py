@@ -1398,6 +1398,52 @@ def payment_raw():
     return jsonify({"ok": True, "env": env, "rows": len(rows), "fields": keys, "sample": rows[:int(request.args.get("n", "3"))]}), 200
 
 
+_EXPLORE = {  # read-only report calls from TCS's own swagger file (https://connect.tcscourier.com/ecom/v1/swagger.json)
+    "loadsheetlogs": "/ecom/api/report/loadsheetlogs",
+    "shipmentweight": "/ecom/api/report/shipmentweight",
+    "cnbulkinquiry": "/ecom/api/inquiry/cnbulkinquiry",
+    "paymentinvoice": "/ecom/api/booking/paymentinvoice",
+}
+
+
+@app.route("/tcs-explore.json", methods=["GET"])
+def tcs_explore():
+    """Look at what a TCS report call returns (keys + first rows). Read-only; allow-listed calls only."""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    ep = request.args.get("ep", "")
+    if ep not in _EXPLORE:
+        return jsonify({"ok": False, "error": "ep must be one of " + ", ".join(_EXPLORE)}), 400
+    try:
+        bearer, ecom = _tcs_get_tokens("connect")
+        params = {"accesstoken": ecom}
+        if ep == "paymentinvoice":
+            params["invoicenumber"] = request.args.get("invoice", "")
+        else:
+            params.update(customerno=request.args.get("customerno") or TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
+                          fromdate=request.args.get("from", ""), todate=request.args.get("to", ""))
+            if ep == "shipmentweight":
+                params["page"] = request.args.get("page", "1")
+            if request.args.get("costcenter"):
+                params["costcenterno"] = request.args["costcenter"]
+        r = requests.get(f"{_tcs_base('connect')}{_EXPLORE[ep]}", headers={"Authorization": f"Bearer {bearer}"},
+                         params=params, timeout=(10, 60))
+        try:
+            body = r.json()
+        except ValueError:
+            body = {"text": r.text[:500]}
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {str(e).split('?')[0][:200]}"}), 502
+
+    def shrink(x, depth=0):
+        if isinstance(x, list):
+            return {"count": len(x), "first": [shrink(i, depth + 1) for i in x[:int(request.args.get('n', '3'))]]}
+        if isinstance(x, dict):
+            return {k: shrink(v, depth + 1) for k, v in x.items()}
+        return x
+    return jsonify({"ok": r.ok, "status": r.status_code, "body": shrink(body)}), 200
+
+
 @app.route("/parcels.json", methods=["GET"])
 def parcels_json():
     if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
