@@ -1119,92 +1119,82 @@ def _products_text(orders: list) -> str:
 
 
 def _pay_summary(payments: list) -> list:
-    """What TCS has paid, what it still owes, and what it keeps for charges - all from TCS's own figures.
-    Only the 'awaiting' row uses an estimate (Shopify total) and says so."""
-    def row(group, kind, items, note, cod=None, **over):
-        r = {"group": group, "kind": kind, "parcels": len(items),
-             "orders": ", ".join(p["order"] for p in items[:6]) + (" ..." if len(items) > 6 else ""),
-             "products": _products_text([p["order"] for p in items]),
-             "cod": round(sum(p["cod"] for p in items), 2) if cod is None else round(cod, 2),
-             "shipping": round(sum(p["shipping"] for p in items), 2), "fuel": round(sum(p["fuel"] for p in items), 2),
-             "stax": round(sum(p["stax"] for p in items), 2), "gst_wh": round(sum(p["gst_wh"] for p in items), 2),
-             "it_wh": round(sum(p["it_wh"] for p in items), 2), "note": note}
-        r.update(over)
-        r["deductions"] = round(r["shipping"] + r["fuel"] + r["stax"] + r["gst_wh"] + r["it_wh"], 2)
-        r["net"] = round(r["cod"] - r["deductions"], 2)
-        return r
+    """The payout table. Only figures TCS itself states are shown as facts: its weekly invoices (payable, paid,
+    withholding), the COD collected, and the money in your bank. Per-parcel charges are NOT itemised by TCS in the
+    data we can read, so deductions are shown as one amount (COD minus what TCS paid)."""
+    def money(x):
+        return round(float(x or 0), 2)
 
-    out = []
-    paid = [p for p in payments if p["pay_status"] == "Paid"]
-    days = sorted({p["pay_date"][:10] for p in paid}, key=lambda d: d[6:10] + d[3:5] + d[:2])
-    for d in days:
-        items = [p for p in paid if p["pay_date"][:10] == d]
-        out.append(row(f"Paid on {d}", "paid", items,
-                       "TCS paid this. COD collected minus shipping, fuel, sales tax and the 2% GST and IT withholding (TCS figures)."))
-    delivered_unpaid = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
-    if delivered_unpaid:
-        exp = 0.0
-        for p in delivered_unpaid:
-            try:
-                exp += int(float(_order_totals.get(p["order"], 0)))  # TCS collects whole rupees (1269.88 -> 1269), as on the paid parcels
-            except (TypeError, ValueError):
-                pass
-        r = row("Delivered, awaiting payment", "awaiting", delivered_unpaid,
-                "ESTIMATE: COD = your Shopify order total. TCS has delivered these but not paid yet (some are not even "
-                "in its payment list yet, so their charges are the usual 150 + fuel + tax); withholding "
-                "shown as 2% + 2% of that COD, as TCS did on the paid parcels.", cod=exp)
-        r["gst_wh"] = round(exp * 0.02, 2)
-        r["it_wh"] = round(exp * 0.02, 2)
-        r["deductions"] = round(r["shipping"] + r["fuel"] + r["stax"] + r["gst_wh"] + r["it_wh"], 2)
-        r["net"] = round(r["cod"] - r["deductions"], 2)
-        out.append(r)
-    back = [p for p in payments if p["pay_status"] == "Pending" and p["state"] in ("returned", "returning", "rejected")]
-    if back:
-        out.append(row("Returned / refused (charges only)", "charges", back,
-                       "No COD comes. TCS still bills the shipping, fuel and sales tax for these parcels and shows them as a "
-                       "negative net payable in its statement, so they reduce what TCS pays you. Return charges are not refunded."))
-    moving = [p for p in payments if p["pay_status"] == "Pending" and p["state"] not in ("delivered", "returned", "returning", "rejected")]
-    if moving:
-        out.append(row("In transit (charges so far)", "charges", moving,
-                       "Not delivered yet. TCS already shows the shipping, fuel and sales tax as a negative net payable. "
-                       "If the parcel is delivered, the COD is added; if it comes back, the charge stays."))
-    try:  # TCS billing-week invoices and money that really reached your bank (typed in received.json)
+    def base(group, kind, items, note):
+        return {"group": group, "kind": kind, "parcels": len(items),
+                "orders": ", ".join(p["order"] for p in items[:6]) + (" ..." if len(items) > 6 else ""),
+                "products": _products_text([p["order"] for p in items]), "cod": "", "shipping": "", "fuel": "",
+                "stax": "", "gst_wh": "", "it_wh": "", "deductions": "", "net": "", "note": note}
+
+    try:
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
             ledger = json.load(f)
     except (OSError, ValueError):
         ledger = {}
     inv, got = ledger.get("invoices", []), ledger.get("received", [])
+    out = []
+    paid = [p for p in payments if p["pay_status"] == "Paid"]
+
     for v in inv:
-        out.append({"group": f"TCS INVOICE {v['week']}", "kind": "invoice", "parcels": "", "orders": "", "products": "",
-                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": v["wht_st"], "it_wh": v["wht_it"],
-                    "deductions": "", "net": float(v["paid"]),
-                    "note": f"TCS's own invoice: payable {v['payable']:,}, paid {v['paid']:,} on {v['paid_date']} "
-                            f"(invoice date {v['invoice_date']}); withholding IT {v['wht_it']} + ST {v['wht_st']}."})
+        try:
+            day = datetime.strptime(v["paid_date"], "%d-%b-%Y").strftime("%d/%m/%Y")
+        except ValueError:
+            day = ""
+        items = [p for p in paid if p["pay_date"][:10] == day]
+        r = base(f"TCS INVOICE {v['week']} - paid {v['paid_date']}", "invoice", items,
+                 f"TCS's own invoice (dated {v['invoice_date']}): payable {v['payable']:,}, paid {v['paid']:,}. "
+                 "The COD is what TCS collected for the parcels paid that day; the rest is TCS's charges for the whole week "
+                 "(including parcels that were returned or not delivered) plus the 2% + 2% withholding.")
+        cod = money(sum(p["cod"] for p in items))
+        r.update(cod=cod, gst_wh=float(v["wht_st"]), it_wh=float(v["wht_it"]),
+                 deductions=round(cod - float(v["paid"]), 2) if items else "", net=float(v["paid"]))
+        out.append(r)
+
     for g in got:
-        out.append({"group": f"RECEIVED {g['at']}", "kind": "received", "parcels": "", "orders": "", "products": "",
-                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
-                    "net": round(float(g["amount"]), 2), "note": g.get("note", "")})
-    if got and inv:
-        rec = round(sum(float(g["amount"]) for g in got), 2)
+        r = base(f"RECEIVED IN BANK {g['at']}", "received", [], g.get("note", ""))
+        r["net"] = round(float(g["amount"]), 2)
+        out.append(r)
+
+    if inv:
         paid_inv = round(sum(float(v["paid"]) for v in inv), 2)
-        out.append({"group": "BANK minus INVOICES", "kind": "total", "parcels": "", "orders": "", "products": "",
-                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
-                    "net": round(rec - paid_inv, 2),
-                    "note": f"Bank {rec:,.2f} vs invoices paid {paid_inv:,.2f}. Week 08-14 Oct matches exactly; the first "
-                            "bank payment (15 Oct) is higher than the 01-07 Oct invoice - ask TCS what the extra covers."})
-    if out:
-        def total(group, kind_rows, note):
-            t = {k: round(sum(r[k] for r in kind_rows), 2) for k in ("cod", "shipping", "fuel", "stax", "gst_wh", "it_wh", "deductions", "net")}
-            return {"group": group, "kind": "total", "parcels": sum(r["parcels"] for r in kind_rows),
-                    "orders": "", "products": "", "note": note, **t}
-        paid_rows = [r for r in out if r["kind"] == "paid"]
-        open_rows = [r for r in out if r["kind"] in ("awaiting", "charges")]
-        if paid_rows:
-            out.append(total("PARCEL-LEVEL PAID rows (not the invoice)", paid_rows, "Per-parcel figures from TCS's ledger. TCS bills by week and rounds the withholding, so they do not add up to the invoice amounts."))
-        if open_rows:
-            out.append(total("STILL OPEN (rough guess, not reliable)", open_rows,
-                             "Per-parcel arithmetic only. TCS bills by week and its invoices differ from the per-parcel sums "
-                             "(week 08-14 Oct: parcel figures give 6,523.56, the invoice says 6,396). Use the TCS INVOICE rows as the truth."))
+        out.append({**base("TOTAL PAID per TCS invoices", "total", [], "Sum of the invoice rows above."),
+                    "net": paid_inv})
+        if got:
+            rec = round(sum(float(g["amount"]) for g in got), 2)
+            out.append({**base("BANK minus INVOICES", "total", [],
+                               f"Bank {rec:,.2f} vs invoices paid {paid_inv:,.2f}. Week 08-14 Oct matches exactly; the first "
+                               "bank payment (15 Oct) is higher than the 01-07 Oct invoice - ask TCS what the extra covers."),
+                        "net": round(rec - paid_inv, 2)})
+
+    waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
+    if waiting:
+        exp = 0
+        for p in waiting:
+            try:
+                exp += int(float(_order_totals.get(p["order"], 0)))  # TCS collects whole rupees
+            except (TypeError, ValueError):
+                pass
+        r = base("Delivered, waiting for TCS to pay", "awaiting", waiting,
+                 "COD TCS has collected or will collect for these delivered parcels (your Shopify total in whole rupees). "
+                 "This is BEFORE TCS's deductions: its charges and withholding are only known when the invoice is issued, "
+                 "so no net amount is shown.")
+        r["cod"] = exp
+        out.append(r)
+
+    back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
+    if back:
+        out.append(base("Returned / refused", "charges", back,
+                        "No COD comes. TCS still charges for these parcels (your ledger shows them as negative lines) and the "
+                        "charge is taken from the weekly payment. Return charges are not refunded. Exact amount: see the invoice."))
+    moving = [p for p in payments if p["pay_status"] != "Paid" and p["state"] not in ("delivered", "returned", "returning", "rejected")]
+    if moving:
+        out.append(base("In transit", "charges", moving,
+                        "Not delivered yet. COD is added when delivered; if the parcel comes back the charge stays."))
     return out
 
 
@@ -1239,6 +1229,8 @@ def _payments_html(rep: dict, esc) -> str:
              "Shipping CHG", "Fuel", "OSA", "Sales tax", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Net payable")
     return (
         f"<div class='sec' id='sec-payments'><h3>Payment details ({len(pays)})</h3>"
+        "<p><small>Per-parcel figures as TCS's ledger lists them (the charges are the same flat amount on every parcel). "
+        "TCS pays by weekly invoice and its invoice totals differ - see the payout table above.</small></p>"
         f"<p id='paysum'>COD <b>{t['cod']:,.2f}</b> &middot; Shipping <b>{t['shipping']:,.2f}</b> &middot; "
         f"Fuel <b>{t['fuel']:,.2f}</b> &middot; Sales tax <b>{t['stax']:,.2f}</b> &middot; GST WH <b>{t['gst_wh']:,.2f}</b> "
         f"&middot; IT WH <b>{t['it_wh']:,.2f}</b> &middot; Net payable <b>{t['net']:,.2f}</b></p><div class='w'><table id='paytbl'>"
