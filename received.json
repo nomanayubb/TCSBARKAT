@@ -1,4 +1,10 @@
-[
-  {"at": "2026-10-15 23:08", "amount": 3814.12, "note": "Received in bank (Sat 15 Oct 2026, 11:08 PM)"},
-  {"at": "2026-10-19 21:43", "amount": 6396.00, "note": "Received in bank (Mon 19 Oct 2026, 9:43 PM)"}
-]
+{
+  "invoices": [
+    {"week": "01_Oct_to_07_Oct_2026", "payable": 3340, "paid": 3340, "invoice_date": "09-OCT-2026", "paid_date": "13-OCT-2026", "wht_it": 95, "wht_st": 95, "addl": 0},
+    {"week": "08_Oct_to_14_Oct_2026", "payable": 6396, "paid": 6396, "invoice_date": "16-OCT-2026", "paid_date": "19-OCT-2026", "wht_it": 228, "wht_st": 228, "addl": 0}
+  ],
+  "received": [
+    {"at": "2026-10-15 23:08", "amount": 3814.12, "note": "Received in bank (Sat 15 Oct 2026, 11:08 PM)"},
+    {"at": "2026-10-19 21:43", "amount": 6396.00, "note": "Received in bank (Mon 19 Oct 2026, 9:43 PM)"}
+  ]
+}

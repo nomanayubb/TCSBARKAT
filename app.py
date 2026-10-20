@@ -1134,24 +1134,30 @@ def _pay_summary(payments: list) -> list:
         out.append(row("In transit (charges so far)", "charges", moving,
                        "Not delivered yet. TCS already shows the shipping, fuel and sales tax as a negative net payable. "
                        "If the parcel is delivered, the COD is added; if it comes back, the charge stays."))
-    try:  # money that really reached your bank (typed in received.json)
+    try:  # TCS billing-week invoices and money that really reached your bank (typed in received.json)
         with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
-            got = json.load(f)
+            ledger = json.load(f)
     except (OSError, ValueError):
-        got = []
-    paid_total = round(sum(r["net"] for r in out if r["kind"] == "paid"), 2)
+        ledger = {}
+    inv, got = ledger.get("invoices", []), ledger.get("received", [])
+    for v in inv:
+        out.append({"group": f"TCS INVOICE {v['week']}", "kind": "invoice", "parcels": "", "orders": "", "products": "",
+                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": v["wht_st"], "it_wh": v["wht_it"],
+                    "deductions": "", "net": float(v["paid"]),
+                    "note": f"TCS's own invoice: payable {v['payable']:,}, paid {v['paid']:,} on {v['paid_date']} "
+                            f"(invoice date {v['invoice_date']}); withholding IT {v['wht_it']} + ST {v['wht_st']}."})
     for g in got:
         out.append({"group": f"RECEIVED {g['at']}", "kind": "received", "parcels": "", "orders": "", "products": "",
                     "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
                     "net": round(float(g["amount"]), 2), "note": g.get("note", "")})
-    if got:
+    if got and inv:
         rec = round(sum(float(g["amount"]) for g in got), 2)
-        out.append({"group": "BANK vs TCS paid rows", "kind": "total", "parcels": "", "orders": "", "products": "",
+        paid_inv = round(sum(float(v["paid"]) for v in inv), 2)
+        out.append({"group": "BANK minus INVOICES", "kind": "total", "parcels": "", "orders": "", "products": "",
                     "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
-                    "net": round(rec - paid_total, 2),
-                    "note": f"You received {rec:,.2f}; TCS's per-parcel figures for the paid parcels add to {paid_total:,.2f}. "
-                            "A negative difference means TCS kept more (for example charges of other parcels). "
-                            "Exact reason needs TCS's payment advice."})
+                    "net": round(rec - paid_inv, 2),
+                    "note": f"Bank {rec:,.2f} vs invoices paid {paid_inv:,.2f}. Week 08-14 Oct matches exactly; the first "
+                            "bank payment (15 Oct) is higher than the 01-07 Oct invoice - ask TCS what the extra covers."})
     if out:
         def total(group, kind_rows, note):
             t = {k: round(sum(r[k] for r in kind_rows), 2) for k in ("cod", "shipping", "fuel", "stax", "gst_wh", "it_wh", "deductions", "net")}
@@ -1160,7 +1166,7 @@ def _pay_summary(payments: list) -> list:
         paid_rows = [r for r in out if r["kind"] == "paid"]
         open_rows = [r for r in out if r["kind"] in ("awaiting", "charges")]
         if paid_rows:
-            out.append(total("TOTAL ALREADY PAID by TCS", paid_rows, "Sum of the paid rows above (TCS figures)."))
+            out.append(total("PARCEL-LEVEL PAID rows (not the invoice)", paid_rows, "Per-parcel figures from TCS's ledger. TCS bills by week and rounds the withholding, so they do not add up to the invoice amounts."))
         if open_rows:
             out.append(total("STILL OPEN (estimate)", open_rows,
                              "Awaiting payment minus the charges TCS keeps for returned and in-transit parcels. Not a bank figure."))
