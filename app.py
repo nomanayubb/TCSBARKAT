@@ -1134,6 +1134,24 @@ def _pay_summary(payments: list) -> list:
         out.append(row("In transit (charges so far)", "charges", moving,
                        "Not delivered yet. TCS already shows the shipping, fuel and sales tax as a negative net payable. "
                        "If the parcel is delivered, the COD is added; if it comes back, the charge stays."))
+    try:  # money that really reached your bank (typed in received.json)
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
+            got = json.load(f)
+    except (OSError, ValueError):
+        got = []
+    paid_total = round(sum(r["net"] for r in out if r["kind"] == "paid"), 2)
+    for g in got:
+        out.append({"group": f"RECEIVED {g['at']}", "kind": "received", "parcels": "", "orders": "", "products": "",
+                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
+                    "net": round(float(g["amount"]), 2), "note": g.get("note", "")})
+    if got:
+        rec = round(sum(float(g["amount"]) for g in got), 2)
+        out.append({"group": "BANK vs TCS paid rows", "kind": "total", "parcels": "", "orders": "", "products": "",
+                    "cod": "", "shipping": "", "fuel": "", "stax": "", "gst_wh": "", "it_wh": "", "deductions": "",
+                    "net": round(rec - paid_total, 2),
+                    "note": f"You received {rec:,.2f}; TCS's per-parcel figures for the paid parcels add to {paid_total:,.2f}. "
+                            "A negative difference means TCS kept more (for example charges of other parcels). "
+                            "Exact reason needs TCS's payment advice."})
     if out:
         def total(group, kind_rows, note):
             t = {k: round(sum(r[k] for r in kind_rows), 2) for k in ("cod", "shipping", "fuel", "stax", "gst_wh", "it_wh", "deductions", "net")}
