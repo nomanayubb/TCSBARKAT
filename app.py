@@ -1168,8 +1168,9 @@ def _pay_summary(payments: list) -> list:
         if paid_rows:
             out.append(total("PARCEL-LEVEL PAID rows (not the invoice)", paid_rows, "Per-parcel figures from TCS's ledger. TCS bills by week and rounds the withholding, so they do not add up to the invoice amounts."))
         if open_rows:
-            out.append(total("STILL OPEN (estimate)", open_rows,
-                             "Awaiting payment minus the charges TCS keeps for returned and in-transit parcels. Not a bank figure."))
+            out.append(total("STILL OPEN (rough guess, not reliable)", open_rows,
+                             "Per-parcel arithmetic only. TCS bills by week and its invoices differ from the per-parcel sums "
+                             "(week 08-14 Oct: parcel figures give 6,523.56, the invoice says 6,396). Use the TCS INVOICE rows as the truth."))
     return out
 
 
