@@ -1365,33 +1365,42 @@ def _statement_lines(rep: dict) -> list:
 
 
 def _statement_html(rep: dict, esc) -> str:
-    lines = rep.get("statement", [])
-    try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
-            inv = {v["week"]: v for v in json.load(f).get("invoices", [])}
-    except (OSError, ValueError):
-        inv = {}
+    """TCS's own Payment Ledger (weekly invoices) and Payment Details (line by line), read from the Envio portal."""
+    d = _envio_fresh()
+    if not d["lines"] and not d["ledger"]:
+        return ("<div class='sec' id='sec-stmt'><h3>TCS payment ledger (from the Envio portal)</h3><p>Not available: "
+                + esc(d["error"] or "waiting for the first read") + "</p></div>")
+    led = "".join(
+        "<tr>" + f"<td>{i}</td>" + "".join(f"<td>{esc(str(v.get(k, '')))}</td>" for k in (
+            "BILLING_WEEK", "AMOUNTPAYABLE", "AMOUNTPAID", "AMOUNTADJUSTED", "AMOUNTRETURN", "NETOUTSTANDING",
+            "INVOICEDATE", "PAYMENTDATE", "WHTIT", "WHTST", "ADDL")) + "</tr>"
+        for i, v in enumerate(d["ledger"], 1))
+    keys = ("ConsignmentNumber", "CustomerReference", "BookingDate", "Consignee", "Origin", "Destination", "Weight",
+            "DeliveryStatus", "CODAmount", "ShippingChg", "OSA", "GSTWH", "ITWH", "ADDWHIT", "PrePayable", "BalPayable")
+    heads = ("CN", "Reference", "Booking date", "Consignee", "Origin", "Destination", "Kg", "Status", "COD amount",
+             "Shipping CHG", "OSA", "GST WH @ 2%", "IT WH @ 2%", "Addl. Non-Filer IT WH", "Pre Schedule Pay Date", "Net payable")
+    lines = sorted(d["lines"], key=lambda r: _wk(r["_week"]), reverse=True)
+    for r in lines:
+        r["week"] = r["_week"]
     tot = {}
-    for l in lines:
-        tot.setdefault(l["week"], [0, 0.0])
-        tot[l["week"]][0] += 1
-        tot[l["week"]][1] += l["net"]
-    keys = ("cn", "order", "booked", "consignee", "route", "weight", "status", "cod", "shipping", "fuel", "stax",
-            "osa", "gst_wh", "it_wh", "addl", "pay_date", "net")
-    heads = ("CN", "Reference", "Booking date", "Consignee", "Route", "Kg", "Status", "COD amount", "Shipping CHG",
-             "Fuel", "Sales tax", "OSA", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Paid on", "Net payable")
+    for r in lines:
+        t = tot.setdefault(r["_week"], [0, 0.0])
+        t[0] += 1
+        t[1] += _num(r.get("BalPayable"))
+    inv = {v["BILLING_WEEK"]: v for v in d["ledger"]}
     check = "".join(
         f"<tr><td><b>{esc(w)}</b></td><td>{n}</td><td>{net:,.2f}</td>"
-        f"<td>{('{:,}'.format(inv[w]['payable'])) if w in inv else 'no invoice entered'}</td>"
-        f"<td>{('{:,.2f}'.format(net - inv[w]['payable'])) if w in inv else ''}</td></tr>"
-        for w, (n, net) in sorted(tot.items(), reverse=True))
+        f"<td>{esc(inv[w]['AMOUNTPAYABLE']) if w in inv else 'not invoiced yet'}</td></tr>"
+        for w, (n, net) in sorted(tot.items(), key=lambda kv: _wk(kv[0]), reverse=True))
     return (
-        "<div class='sec' id='sec-stmt'><h3>TCS payment statement (rebuilt line by line)</h3><p><small>Same layout as your "
-        "Payment Ledger Details. Lines are rebuilt from TCS parcel data using the pattern of your statement: the fee "
-        "(shipping + fuel + sales tax = 200.10) is cut in the parcel's pickup week, the COD line follows in the delivery week. "
-        "The check table compares each week's total with the TCS invoice.</small></p>"
-        "<div class='w'><table><tr><th>Billing week</th><th>Lines</th><th>Total of lines</th><th>TCS invoice payable</th>"
-        "<th>Difference</th></tr>" + check + "</table></div>"
+        "<div class='sec' id='sec-stmt'><h3>TCS payment ledger (read from the Envio portal)</h3>"
+        "<p><small>Exactly as the portal shows it (Payment Ledger Report and Payment Details). Read automatically; "
+        f"last read {int(time.time() - d['at'])}s ago.</small></p>"
+        "<div class='w'><table id='ledtbl'><tr><th>#</th><th>Billing week</th><th>Amount payable</th><th>Amount paid</th>"
+        "<th>Amount adjusted</th><th>Amount return</th><th>Net outstanding</th><th>Invoice date</th><th>Payment date</th>"
+        "<th>WHT IT 2%</th><th>WHT ST 2%</th><th>Addl non-filer</th></tr>" + led + "</table></div>"
+        "<div class='w'><table><tr><th>Billing week</th><th>Lines</th><th>Sum of the lines' net payable</th>"
+        "<th>Invoice amount payable</th></tr>" + check + "</table></div>"
         "<div class='w'><table id='stmttbl'><tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "</tr>"
         + _grouped_rows(lines, "week", keys, esc, len(keys) + 1) + "</table></div></div>"
     )
@@ -1443,7 +1452,7 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div></div>"
         "<div class='sec' id='sec-status'><h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div></div>"
-        + _weekly_html(rep, esc) + _paysum_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
+        + _weekly_html(rep, esc) + _statement_html(rep, esc) + _paysum_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
         f"<div class='sec' id='sec-parcels'><h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table id='partbl'>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>Step time</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th>"
@@ -1677,6 +1686,51 @@ def _envio_rows(account: str, period: str, monthly: bool = False) -> list:
                      f"columns[{i}][orderable]": "false", f"columns[{i}][search][value]": "",
                      f"columns[{i}][search][regex]": "false"})
     return (_envio_post("/PaymentDetail/GetPaymentDetails", data) or {}).get("data") or []
+
+
+_envio_data = {"ledger": [], "lines": [], "at": 0.0, "error": ""}
+
+
+def _envio_refresh():
+    """Reads the two portal reports by itself: the weekly invoices (Payment Ledger) and the line-by-line statement
+    (Payment Details) for every billing week. Failures keep the last good data and record the reason."""
+    acct = TCS_ACCOUNT_NO or "MGEC23077"
+    try:
+        ledger = _envio_post("/Report/CustomerLedgerDetailPopup", {"AccountNo": acct})
+        if not isinstance(ledger, list):
+            raise RuntimeError("unexpected ledger answer")
+        lines = []
+        for w in ((_envio_periods(acct).get("PaymentPeriod")) or []):
+            for r in _envio_rows(acct, w["ID"]):
+                r = dict(r)
+                r["_week"] = w["ID"]
+                lines.append(r)
+        _envio_data.update(ledger=ledger, lines=lines, at=time.time(), error="")
+    except Exception as e:
+        log.exception("Envio portal refresh failed")
+        _envio_data["error"] = f"{type(e).__name__}: {str(e)[:160]}"
+
+
+def _envio_fresh() -> dict:
+    if time.time() - _envio_data["at"] > 60 and time.time() - _envio_data.get("tried", 0) > 30:
+        _envio_data["tried"] = time.time()
+        _envio_refresh()
+    return _envio_data
+
+
+def _wk(label: str):
+    try:
+        return datetime.strptime(label[:6] + label[-4:], "%d_%b%Y")
+    except ValueError:
+        return datetime.min
+
+
+def _num(x) -> float:
+    try:
+        return float(str(x).replace(",", "") or 0)
+    except ValueError:
+        return 0.0
+
 
 
 @app.route("/envio-test.json", methods=["GET"])
