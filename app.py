@@ -1426,8 +1426,8 @@ def _report_html(rep: dict, key: str) -> str:
     )
     parcel_rows = _grouped_rows(rep["parcels"], "booked",
                                 ("cn", "booked", "delivered_on", "status", "last_time", "city", "order",
-                                 "product", "weight", "pay_status", "pay_date", "cod", "shipping", "fuel", "stax", "gst_wh", "it_wh"),
-                                esc, 19, eye_key="cn")
+                                 "product", "weight", "pay_status", "pay_date", "cod"),
+                                esc, 14, eye_key="cn")
     date_rows += (f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
                   + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
     status_rows += f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
@@ -1455,11 +1455,10 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div></div>"
         "<div class='sec' id='sec-status'><h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div></div>"
-        + _weekly_html(rep, esc) + _statement_html(rep, esc) + _paysum_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
+        + _weekly_html(rep, esc) + _statement_html(rep, esc) + _paysum_html(rep, esc) + _returns_html(rep, esc) +
         f"<div class='sec' id='sec-parcels'><h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table id='partbl'>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>Step time</th><th>City</th>"
-        "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th>"
-        "<th>Shipping CHG</th><th>Fuel</th><th>Sales tax</th><th>GST WH 2%</th><th>IT WH 2%</th><th>Track</th></tr>"
+        "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th><th>Track</th></tr>"
         f"{parcel_rows}</table></div></div>"
         f"<div class='sec' id='sec-nonshopify'><h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th><th>Track</th></tr>"
