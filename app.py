@@ -1400,15 +1400,18 @@ def _statement_lines(rep: dict) -> list:
                 "route": "MUX - " + str(p.get("city") or ""), "weight": 0.5, "pay_date": (q or {}).get("pay_date", "")[:10] if q else ""}
         if dd and dd <= week_end:
             lines.append({**base, "week": blabel, "status": "Delivered", "cod": cod, "shipping": std["shipping"], "osa": 0.0,
+                          "fuel": std["fuel"], "stax": std["stax"],
                           "gst_wh": gst, "it_wh": itw, "addl": 0.0, "net": round(cod - fee - gst - itw, 2),
                           "when": week_end.isoformat()})
         else:
             st = {"returned": "Return To Shipper", "returning": "Return To Origin"}.get(p.get("state"), "InProcess")
             lines.append({**base, "week": blabel, "status": st, "cod": 0.0, "shipping": std["shipping"], "osa": 0.0,
+                          "fuel": std["fuel"], "stax": std["stax"],
                           "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0, "net": round(-fee, 2), "when": week_end.isoformat()})
             if dd:  # delivered in a later week: COD line, fee already cut
                 dstart, dlabel = _week_of(dd)
                 lines.append({**base, "week": dlabel, "status": "Delivered", "cod": cod, "shipping": 0.0, "osa": 0.0,
+                              "fuel": 0.0, "stax": 0.0,
                               "gst_wh": gst, "it_wh": itw, "addl": 0.0, "net": round(cod - gst - itw, 2),
                               "when": dd.isoformat()})
     lines.sort(key=lambda l: (l["when"], str(l["cn"])), reverse=True)
@@ -1427,10 +1430,10 @@ def _statement_html(rep: dict, esc) -> str:
         tot.setdefault(l["week"], [0, 0.0])
         tot[l["week"]][0] += 1
         tot[l["week"]][1] += l["net"]
-    keys = ("cn", "order", "booked", "consignee", "route", "weight", "status", "cod", "shipping", "osa", "gst_wh",
-            "it_wh", "addl", "pay_date", "net")
+    keys = ("cn", "order", "booked", "consignee", "route", "weight", "status", "cod", "shipping", "fuel", "stax",
+            "osa", "gst_wh", "it_wh", "addl", "pay_date", "net")
     heads = ("CN", "Reference", "Booking date", "Consignee", "Route", "Kg", "Status", "COD amount", "Shipping CHG",
-             "OSA", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Paid on", "Net payable")
+             "Fuel", "Sales tax", "OSA", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Paid on", "Net payable")
     check = "".join(
         f"<tr><td><b>{esc(w)}</b></td><td>{n}</td><td>{net:,.2f}</td>"
         f"<td>{('{:,}'.format(inv[w]['payable'])) if w in inv else 'no invoice entered'}</td>"
