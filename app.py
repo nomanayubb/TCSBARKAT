@@ -1615,6 +1615,89 @@ def tcs_explore():
     return jsonify({"ok": r.ok, "status": r.status_code, "body": shrink(body)}), 200
 
 
+# ------------------------------------------------ Envio portal (the real Payment Details report)
+ENVIO_BASE = "https://envio.tcscourier.com"
+ENVIO_USERNAME = os.environ.get("ENVIO_USERNAME", "").strip() or TCS_USERNAME
+ENVIO_PASSWORD = os.environ.get("ENVIO_PASSWORD", "") or TCS_PASSWORD
+_envio = {"session": None, "at": 0.0, "error": ""}
+_envio_lock = threading.Lock()
+_ENVIO_COLS = ["id", "ConsignmentNumber", "CustomerReference", "BookingDate", "Consignee", "Origin", "Destination",
+               "Weight", "PaymentPeriod", "DeliveryStatus", "CODAmount", "ShippingChg", "OSA", "GSTWH", "ITWH",
+               "ADDWHIT", "PrePayable", "BalPayable"]
+
+
+def _envio_login():
+    """Signs in to the Envio portal the way the login page does (anti-forgery token + username + password)."""
+    if not (ENVIO_USERNAME and ENVIO_PASSWORD):
+        raise RuntimeError("ENVIO_USERNAME / ENVIO_PASSWORD (or TCS_USERNAME / TCS_PASSWORD) are not set")
+    sess = requests.Session()
+    sess.headers.update({"User-Agent": "Mozilla/5.0 (compatible; TCS-report/1.0)"})
+    page = sess.get(f"{ENVIO_BASE}/UserAccount/Login", timeout=(10, 30))
+    m = re.search(r'name="__RequestVerificationToken"[^>]*value="([^"]+)"', page.text) or \
+        re.search(r'value="([^"]+)"[^>]*name="__RequestVerificationToken"', page.text)
+    if not m:
+        raise RuntimeError("Envio login page has no anti-forgery token")
+    r = sess.post(f"{ENVIO_BASE}/UserAccount/Login",
+                  data={"__RequestVerificationToken": m.group(1), "UserName": ENVIO_USERNAME,
+                        "Password": ENVIO_PASSWORD, "RememberMe": "false"},
+                  timeout=(10, 30), allow_redirects=True)
+    if "/UserAccount/Login" in r.url or "login-username" in r.text:
+        raise RuntimeError("Envio login was not accepted (wrong username/password for the portal, or extra verification)")
+    _envio.update(session=sess, at=time.time(), error="")
+    return sess
+
+
+def _envio_post(path: str, data: dict) -> dict:
+    with _envio_lock:
+        for attempt in (1, 2):
+            sess = _envio["session"] if (_envio["session"] and time.time() - _envio["at"] < 1500) else _envio_login()
+            r = sess.post(f"{ENVIO_BASE}{path}", data=data, timeout=(10, 60),
+                          headers={"X-Requested-With": "XMLHttpRequest"})
+            try:
+                body = r.json()
+            except ValueError:
+                body = None
+            if body is not None and not (isinstance(body, dict) and body.get("Error") == "SessionExpired"):
+                _envio["at"] = time.time()
+                return body
+            _envio["session"] = None  # expired: sign in again once
+        raise RuntimeError("Envio session could not be refreshed")
+
+
+def _envio_periods(account: str) -> dict:
+    return _envio_post("/PaymentDetail/BindPaymentPeriod", {"AccountNo": account})
+
+
+def _envio_rows(account: str, period: str, monthly: bool = False) -> list:
+    data = {"draw": "1", "start": "0", "length": "1000", "search[value]": "", "search[regex]": "false",
+            "AccountNo": account, "PaymentPeriod": period, "isMonthWise": "true" if monthly else "false",
+            "Status": "ALL", "Consignment": ""}
+    for i, c in enumerate(_ENVIO_COLS):
+        data.update({f"columns[{i}][data]": c, f"columns[{i}][name]": "", f"columns[{i}][searchable]": "true",
+                     f"columns[{i}][orderable]": "false", f"columns[{i}][search][value]": "",
+                     f"columns[{i}][search][regex]": "false"})
+    return (_envio_post("/PaymentDetail/GetPaymentDetails", data) or {}).get("data") or []
+
+
+@app.route("/envio-test.json", methods=["GET"])
+def envio_test():
+    """Does the service sign in to the Envio portal by itself, and can it read the payment periods?"""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    try:
+        acct = request.args.get("account") or TCS_ACCOUNT_NO or "MGEC23077"
+        p = _envio_periods(acct)
+        periods = [x.get("ID") for x in (p.get("PaymentPeriod") or [])]
+        out = {"ok": True, "account": acct, "weekly_periods": periods,
+               "monthly_periods": [x.get("ID") for x in (p.get("PaymentPeriodM") or [])]}
+        if periods and request.args.get("rows") == "1":
+            rows = _envio_rows(acct, periods[-1])
+            out["rows_in_oldest_week"] = len(rows)
+        return jsonify(out), 200
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {str(e)[:200]}"}), 502
+
+
 @app.route("/parcels.json", methods=["GET"])
 def parcels_json():
     if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
