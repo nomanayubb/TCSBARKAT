@@ -1199,6 +1199,21 @@ def _in_range(booked: str, args) -> bool:
     return (not f or booked >= f) and (not t or booked <= t)
 
 
+@app.route("/payment-raw.json", methods=["GET"])
+def payment_raw():
+    """Exactly what TCS's Payment Detail call returns (all fields), for a date range of up to 31 days."""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    try:
+        d_to = date.fromisoformat(request.args.get("to") or datetime.now().date().isoformat())
+        d_from = date.fromisoformat(request.args.get("from") or (d_to - timedelta(days=6)).isoformat())
+        rows, env = _fetch_parcels_any_env(d_from, d_to)
+    except Exception as e:
+        return jsonify({"ok": False, "error": f"{type(e).__name__}: {str(e).split('?')[0][:200]}"}), 502
+    keys = sorted({k for r in rows for k in r})
+    return jsonify({"ok": True, "env": env, "rows": len(rows), "fields": keys, "sample": rows[:int(request.args.get("n", "3"))]}), 200
+
+
 @app.route("/parcels.json", methods=["GET"])
 def parcels_json():
     if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
