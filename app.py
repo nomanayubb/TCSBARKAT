@@ -993,6 +993,17 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
         p["pay_status"] = q["pay_status"] if q else "Not listed yet"
         for k in ("pay_date", "cod", "shipping", "fuel", "stax", "gst_wh", "it_wh", "net"):
             p[k] = q[k] if q else ""
+    if payments:  # delivered parcels TCS has not put in its payment list yet: charges are the usual ones (estimate)
+        std = {k: Counter(p[k] for p in payments).most_common(1)[0][0] for k in ("shipping", "fuel", "stax")}
+        for p in parcels:
+            if p["state"] == "delivered" and str(p["cn"]) not in by_cn:
+                payments.append({
+                    "cn": p["cn"], "order": p["order"] or "", "booked": p["booked"], "consignee": p.get("consignee") or "",
+                    "city": p["city"], "weight": p.get("weight") or 0.5, "status": p["status"], "state": "delivered",
+                    "pay_status": "Not listed yet", "pay_date": "", "cod": 0.0, "shipping": std["shipping"],
+                    "fuel": std["fuel"], "osa": 0.0, "stax": std["stax"], "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0,
+                    "net": round(-(std["shipping"] + std["fuel"] + std["stax"]), 2)})
+        payments.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
     pay_summary = _pay_summary(payments)
     return {
         "from": d_from.isoformat(), "to": d_to.isoformat(), "env": used_env,
@@ -1096,7 +1107,7 @@ def _pay_summary(payments: list) -> list:
         items = [p for p in paid if p["pay_date"][:10] == d]
         out.append(row(f"Paid on {d}", "paid", items,
                        "TCS paid this. COD collected minus shipping, fuel, sales tax and the 2% GST and IT withholding (TCS figures)."))
-    delivered_unpaid = [p for p in payments if p["pay_status"] == "Pending" and p["state"] == "delivered"]
+    delivered_unpaid = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
     if delivered_unpaid:
         exp = 0.0
         for p in delivered_unpaid:
@@ -1105,7 +1116,8 @@ def _pay_summary(payments: list) -> list:
             except (TypeError, ValueError):
                 pass
         r = row("Delivered, awaiting payment", "awaiting", delivered_unpaid,
-                "ESTIMATE: COD = your Shopify order total. TCS has delivered these but not paid yet; withholding "
+                "ESTIMATE: COD = your Shopify order total. TCS has delivered these but not paid yet (some are not even "
+                "in its payment list yet, so their charges are the usual 150 + fuel + tax); withholding "
                 "shown as 2% + 2% of that COD, as TCS did on the paid parcels.", cod=exp)
         r["gst_wh"] = round(exp * 0.02, 2)
         r["it_wh"] = round(exp * 0.02, 2)
