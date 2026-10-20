@@ -870,6 +870,7 @@ def _shopify_orders_since(since_iso: str, fields: str, max_orders: int = 1500) -
 
 
 _loadsheet_cache = {}
+_loadsheet_when = {}  # CN -> datetime of the pickup list it was on
 
 
 def _loadsheet_cns(d_from: date, d_to: date) -> list:
@@ -892,8 +893,17 @@ def _loadsheet_cns(d_from: date, d_to: date) -> list:
                                  params={"accesstoken": ecom, "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
                                          "fromdate": key[0], "todate": key[1]}, timeout=(10, 60))
                 body = r.json() if r.ok else {}
-                cns = [str(x.get("consignmentno")) for sheet in (body.get("detail") or [])
-                       for x in (sheet.get("loadsheetdetails") or []) if x.get("consignmentno")]
+                cns = []
+                for sheet in (body.get("detail") or []):
+                    try:
+                        when = datetime.strptime(str(sheet.get("loadsheetdate")), "%Y-%m-%d %I:%M %p")
+                    except ValueError:
+                        when = None
+                    for x in (sheet.get("loadsheetdetails") or []):
+                        if x.get("consignmentno"):
+                            cns.append(str(x["consignmentno"]))
+                            if when:
+                                _loadsheet_when[str(x["consignmentno"])] = when
                 _loadsheet_cache[key] = (time.time(), cns)
                 out += cns
             except Exception:
@@ -944,6 +954,15 @@ def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
 
 
 def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
+    rep = _build_report_core(d_from, d_to, extra)
+    try:
+        rep["statement"] = _statement_lines(rep)
+    except Exception:
+        log.exception("Statement rebuild failed")
+    return rep
+
+
+def _build_report_core(d_from: date, d_to: date, extra: str = "") -> dict:
     try:
         rows, used_env = _fetch_parcels_any_env(d_from, d_to)
     except Exception as e:
@@ -1051,6 +1070,7 @@ def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
         "returns": [p for p in parcels if p["state"] in ("returned", "returning")],
         "payments": payments,
         "pay_summary": pay_summary,
+        "statement": [],
         "unbooked": unbooked,
         "non_shopify": non_shopify,
     }
@@ -1074,7 +1094,7 @@ REPORT_SUM_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.se
 REPORT_PAY_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'paytbl\'); if(!tb) return;\nvar sumEl=document.getElementById(\'paysum\'), last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction num(v){return v==null||v===\'\'?\'\':Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}\nfunction cell(name,p,n){\n  switch(name){\n    case \'#\': return n;\n    case \'CN\': return esc(p.cn);\n    case \'Order\': return esc(p.order);\n    case \'Consignee\': return esc(p.consignee);\n    case \'Destination\': return esc(p.city);\n    case \'Kg\': return esc(p.weight);\n    case \'Status\': return esc(p.status);\n    case \'Payment\': return esc(p.pay_status);\n    case \'Paid on\': return esc(p.pay_date);\n    case \'COD amount\': return num(p.cod);\n    case \'Shipping CHG\': return num(p.shipping);\n    case \'Fuel\': return num(p.fuel);\n    case \'OSA\': return num(p.osa);\n    case \'Sales tax\': return num(p.stax);\n    case \'GST WH 2%\': return num(p.gst_wh);\n    case \'IT WH 2%\': return num(p.it_wh);\n    case \'Addl IT WH\': return num(p.addl);\n    case \'Net payable\': return \'<b>\'+num(p.net)+\'</b>\';\n    case \'Track\': return "<button class=\'eye\' title=\'Tracking history\' data-cn=\'"+esc(p.cn)+"\'>&#128065;</button>";\n  }\n  return \'\';\n}\nfunction render(d){\n  var open={};\n  Array.prototype.forEach.call(tb.rows,function(r){var e=r.querySelector(\'button.eye.on\');if(e)open[e.getAttribute(\'data-cn\')]=1});\n  var names=Array.prototype.map.call(tb.rows[0].cells,label), body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  var counts={}; d.payments.forEach(function(p){counts[p.booked]=(counts[p.booked]||0)+1});\n  var cur=null,n=0,k=1;\n  d.payments.forEach(function(p){\n    if(p.booked!==cur){\n      cur=p.booked;n=0;\n      var g=document.createElement(\'tr\'); g.className=\'grp\'; g.setAttribute(\'data-day\',cur);\n      g.innerHTML="<td colspan=\'"+names.length+"\' style=\'background:#eef;font-weight:bold\'>"+esc(cur)+" - "+counts[cur]+" parcels</td>";\n      g._ord=k++; body.appendChild(g);\n    }\n    n++;\n    var r=document.createElement(\'tr\'); r.setAttribute(\'data-day\',cur);\n    r.innerHTML=names.map(function(nm){return \'<td>\'+cell(nm,p,n)+\'</td>\'}).join(\'\');\n    r._ord=k++; body.appendChild(r);\n  });\n  if(window.__reportApply) window.__reportApply(tb);\n  tb.querySelectorAll(\'button.eye\').forEach(function(b){if(open[b.getAttribute(\'data-cn\')])b.click()});\n  if(sumEl){var t=d.totals; sumEl.innerHTML=\'COD <b>\'+num(t.cod)+\'</b> &middot; Shipping <b>\'+num(t.shipping)+\'</b> &middot; Fuel <b>\'+num(t.fuel)+\'</b> &middot; Sales tax <b>\'+num(t.stax)+\'</b> &middot; GST WH <b>\'+num(t.gst_wh)+\'</b> &middot; IT WH <b>\'+num(t.it_wh)+\'</b> &middot; Net payable <b>\'+num(t.net)+\'</b><br><small>Paid parcels: \'+t.paid+\' &middot; pending: \'+t.pending+\' &middot; updated \'+new Date().toLocaleTimeString()+\'</small>\'}\n}\nfunction poll(){\n  var sec=tb.closest(\'.sec\'); if(document.hidden||(sec&&sec.style.display===\'none\')) return;\n  fetch(\'/payments.json?key=\'+encodeURIComponent(KEY)+\'&from=\'+encodeURIComponent((document.querySelector(\'input[name=from]\')||{}).value||\'\')+\'&to=\'+encodeURIComponent((document.querySelector(\'input[name=to]\')||{}).value||\'\'),{cache:\'no-store\'})\n    .then(function(r){return r.json()}).then(function(d){\n      if(!d.payments) return;\n      var sig=JSON.stringify(d.payments);\n      if(sig!==last){last=sig;render(d)}\n    }).catch(function(){});\n}\npoll(); setInterval(poll,1000);\n})();\n</script>\n'
 
 
-REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f3f3f3;border-radius:6px}\n#tablebar label{margin-right:14px;white-space:nowrap;cursor:pointer}\n.pager{margin:4px 0 6px;font-size:14px}\n.pager button{padding:2px 10px;margin:0 3px;cursor:pointer}\n.pager select{padding:2px 4px}\n@media (prefers-color-scheme:dark){#tablebar{background:#222}}\n</style>\n<script>\n(function(){\nvar secs=Array.prototype.slice.call(document.querySelectorAll(\'.sec\'));\nvar TITLES={\'sec-date\':\'Per date\',\'sec-status\':\'Status summary\',\'sec-returns\':\'Return analysis\',\'sec-week\':\'Per week\',\'sec-paysum\':\'TCS payout\',\'sec-payments\':\'Payments\',\'sec-parcels\':\'All parcels\',\'sec-nonshopify\':\'Non-Shopify\',\'sec-unbooked\':\'Not booked\'};\nvar saved={}; try{saved=JSON.parse(localStorage.getItem(\'rtables\')||\'{}\')}catch(e){}\nvar bar=document.createElement(\'div\'); bar.id=\'tablebar\';\nbar.innerHTML=\'<b>Tables shown:</b> \';\nsecs.forEach(function(sec){\n  var on=saved[sec.id]!==false;\n  var lb=document.createElement(\'label\'); var cb=document.createElement(\'input\'); cb.type=\'checkbox\'; cb.checked=on;\n  lb.appendChild(cb); lb.appendChild(document.createTextNode(\' \'+(TITLES[sec.id]||sec.id)));\n  bar.appendChild(lb); sec.style.display=on?\'\':\'none\';\n  cb.addEventListener(\'change\',function(){\n    sec.style.display=cb.checked?\'\':\'none\'; saved[sec.id]=cb.checked;\n    try{localStorage.setItem(\'rtables\',JSON.stringify(saved))}catch(e){}\n  });\n});\nvar mb=document.getElementById(\'modebar\'); if(mb) mb.parentNode.insertBefore(bar,mb); else document.body.insertBefore(bar,document.body.firstChild);\n\nvar SIZES=[10,25,50,100,300,500,0];\nvar size=300; try{size=parseInt(localStorage.getItem(\'rsize2\')||\'300\',10)}catch(e){}\nfunction isData(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')}\nfunction paginate(tb){\n  if(!tb._pager) return;\n  var rows=Array.prototype.slice.call(tb.rows,1);\n  var total=rows.filter(isData).length;\n  var sz=tb._size, pages=sz?Math.max(1,Math.ceil(total/sz)):1;\n  if(tb._page>=pages) tb._page=pages-1; if(tb._page<0) tb._page=0;\n  var start=sz?tb._page*sz:0, end=sz?start+sz:total+1, idx=0, lastVisible=true;\n  var grpRow=null, grpHasVisible=false;\n  function flushGrp(){ if(grpRow) grpRow.style.display=grpHasVisible?\'\':\'none\' }\n  rows.forEach(function(r){\n    if(r.classList.contains(\'grp\')){\n      flushGrp(); grpHasVisible=false;\n      if(r._hid){grpRow=null;return}\n      grpRow=r;\n    } else if(isData(r)){\n      var vis=idx>=start&&idx<end; idx++;\n      r.style.display=vis?\'\':\'none\'; lastVisible=vis; if(vis) grpHasVisible=true;\n    } else if(r.classList.contains(\'det\')){\n      r.style.display=lastVisible?\'\':\'none\';\n    }\n  });\n  flushGrp();\n  var p=tb._pager;\n  p.querySelector(\'.pinfo\').textContent=total?(\'Showing \'+(Math.min(start+1,total))+\' to \'+Math.min(end,total)+\' of \'+total+\' entries - page \'+(tb._page+1)+\' of \'+pages):\'No entries\';\n  p.querySelector(\'.pprev\').disabled=tb._page<=0; p.querySelector(\'.pnext\').disabled=tb._page>=pages-1;\n}\nwindow.__paginate=paginate;\ndocument.querySelectorAll(\'.sec .w table\').forEach(function(tb){\n  var wrap=tb.parentElement; if(wrap.parentElement.querySelector(\'.pager\')) return;\n  var p=document.createElement(\'div\'); p.className=\'pager\';\n  p.innerHTML=\'Show <select class="psize">\'+SIZES.map(function(s){return \'<option value="\'+s+\'"\'+(s===size?\' selected\':\'\')+\'>\'+(s||\'All\')+\'</option>\'}).join(\'\')+\'</select> entries \'+\n    \'<button class="pprev">&laquo; Prev</button><button class="pnext">Next &raquo;</button> <span class="pinfo"></span>\';\n  wrap.parentNode.insertBefore(p,wrap);\n  tb._pager=p; tb._size=size; tb._page=0;\n  p.querySelector(\'.psize\').addEventListener(\'change\',function(e){\n    size=parseInt(e.target.value,10); try{localStorage.setItem(\'rsize2\',String(size))}catch(x){}\n    document.querySelectorAll(\'.sec .w table\').forEach(function(t){ if(t._pager){t._size=size;t._page=0;t._pager.querySelector(\'.psize\').value=String(size);paginate(t)} });\n  });\n  p.querySelector(\'.pprev\').addEventListener(\'click\',function(){tb._page--;paginate(tb)});\n  p.querySelector(\'.pnext\').addEventListener(\'click\',function(){tb._page++;paginate(tb)});\n  paginate(tb);\n});\n})();\n</script>\n'
+REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f3f3f3;border-radius:6px}\n#tablebar label{margin-right:14px;white-space:nowrap;cursor:pointer}\n.pager{margin:4px 0 6px;font-size:14px}\n.pager button{padding:2px 10px;margin:0 3px;cursor:pointer}\n.pager select{padding:2px 4px}\n@media (prefers-color-scheme:dark){#tablebar{background:#222}}\n</style>\n<script>\n(function(){\nvar secs=Array.prototype.slice.call(document.querySelectorAll(\'.sec\'));\nvar TITLES={\'sec-date\':\'Per date\',\'sec-status\':\'Status summary\',\'sec-returns\':\'Return analysis\',\'sec-week\':\'Per week\',\'sec-paysum\':\'TCS payout\',\'sec-stmt\':\'Statement\',\'sec-payments\':\'Payments\',\'sec-parcels\':\'All parcels\',\'sec-nonshopify\':\'Non-Shopify\',\'sec-unbooked\':\'Not booked\'};\nvar saved={}; try{saved=JSON.parse(localStorage.getItem(\'rtables\')||\'{}\')}catch(e){}\nvar bar=document.createElement(\'div\'); bar.id=\'tablebar\';\nbar.innerHTML=\'<b>Tables shown:</b> \';\nsecs.forEach(function(sec){\n  var on=saved[sec.id]!==false;\n  var lb=document.createElement(\'label\'); var cb=document.createElement(\'input\'); cb.type=\'checkbox\'; cb.checked=on;\n  lb.appendChild(cb); lb.appendChild(document.createTextNode(\' \'+(TITLES[sec.id]||sec.id)));\n  bar.appendChild(lb); sec.style.display=on?\'\':\'none\';\n  cb.addEventListener(\'change\',function(){\n    sec.style.display=cb.checked?\'\':\'none\'; saved[sec.id]=cb.checked;\n    try{localStorage.setItem(\'rtables\',JSON.stringify(saved))}catch(e){}\n  });\n});\nvar mb=document.getElementById(\'modebar\'); if(mb) mb.parentNode.insertBefore(bar,mb); else document.body.insertBefore(bar,document.body.firstChild);\n\nvar SIZES=[10,25,50,100,300,500,0];\nvar size=300; try{size=parseInt(localStorage.getItem(\'rsize2\')||\'300\',10)}catch(e){}\nfunction isData(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')}\nfunction paginate(tb){\n  if(!tb._pager) return;\n  var rows=Array.prototype.slice.call(tb.rows,1);\n  var total=rows.filter(isData).length;\n  var sz=tb._size, pages=sz?Math.max(1,Math.ceil(total/sz)):1;\n  if(tb._page>=pages) tb._page=pages-1; if(tb._page<0) tb._page=0;\n  var start=sz?tb._page*sz:0, end=sz?start+sz:total+1, idx=0, lastVisible=true;\n  var grpRow=null, grpHasVisible=false;\n  function flushGrp(){ if(grpRow) grpRow.style.display=grpHasVisible?\'\':\'none\' }\n  rows.forEach(function(r){\n    if(r.classList.contains(\'grp\')){\n      flushGrp(); grpHasVisible=false;\n      if(r._hid){grpRow=null;return}\n      grpRow=r;\n    } else if(isData(r)){\n      var vis=idx>=start&&idx<end; idx++;\n      r.style.display=vis?\'\':\'none\'; lastVisible=vis; if(vis) grpHasVisible=true;\n    } else if(r.classList.contains(\'det\')){\n      r.style.display=lastVisible?\'\':\'none\';\n    }\n  });\n  flushGrp();\n  var p=tb._pager;\n  p.querySelector(\'.pinfo\').textContent=total?(\'Showing \'+(Math.min(start+1,total))+\' to \'+Math.min(end,total)+\' of \'+total+\' entries - page \'+(tb._page+1)+\' of \'+pages):\'No entries\';\n  p.querySelector(\'.pprev\').disabled=tb._page<=0; p.querySelector(\'.pnext\').disabled=tb._page>=pages-1;\n}\nwindow.__paginate=paginate;\ndocument.querySelectorAll(\'.sec .w table\').forEach(function(tb){\n  var wrap=tb.parentElement; if(wrap.parentElement.querySelector(\'.pager\')) return;\n  var p=document.createElement(\'div\'); p.className=\'pager\';\n  p.innerHTML=\'Show <select class="psize">\'+SIZES.map(function(s){return \'<option value="\'+s+\'"\'+(s===size?\' selected\':\'\')+\'>\'+(s||\'All\')+\'</option>\'}).join(\'\')+\'</select> entries \'+\n    \'<button class="pprev">&laquo; Prev</button><button class="pnext">Next &raquo;</button> <span class="pinfo"></span>\';\n  wrap.parentNode.insertBefore(p,wrap);\n  tb._pager=p; tb._size=size; tb._page=0;\n  p.querySelector(\'.psize\').addEventListener(\'change\',function(e){\n    size=parseInt(e.target.value,10); try{localStorage.setItem(\'rsize2\',String(size))}catch(x){}\n    document.querySelectorAll(\'.sec .w table\').forEach(function(t){ if(t._pager){t._size=size;t._page=0;t._pager.querySelector(\'.psize\').value=String(size);paginate(t)} });\n  });\n  p.querySelector(\'.pprev\').addEventListener(\'click\',function(){tb._page--;paginate(tb)});\n  p.querySelector(\'.pnext\').addEventListener(\'click\',function(){tb._page++;paginate(tb)});\n  paginate(tb);\n});\n})();\n</script>\n'
 
 
 REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){try{apply0(tb)}finally{if(window.__paginate)window.__paginate(tb)}}function apply0(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';g._hid=false;body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\';g._hid=true});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));window.__reportApply=apply;\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
@@ -1338,6 +1358,96 @@ def _returns_html(rep: dict, esc) -> str:
     )
 
 
+def _bill_week(when: datetime) -> tuple:
+    """Billing week of a parcel: the TCS week of its pickup. A pickup in the evening of the week's last day falls in the
+    NEXT week (seen on 7 Oct 6:58 PM; assumption: the cut-off is about 5 PM)."""
+    start, label = _week_of(when.date())
+    end = int(label.split("_to_")[1][:2])
+    if when.day == end and when.hour >= 17:
+        return _week_of(when.date() + timedelta(days=1))
+    return start, label
+
+
+def _statement_lines(rep: dict) -> list:
+    """Rebuilds TCS's payment statement: one line per parcel per billing week (fee cut in advance while the parcel is
+    still moving, COD line when it is delivered), using the pattern seen in your Payment Ledger Details."""
+    pays = {str(p["cn"]): p for p in rep.get("payments", [])}
+    std = {"shipping": 150, "fuel": 22.5, "stax": 27.6}
+    if pays:
+        std = {k: Counter(p[k] for p in pays.values()).most_common(1)[0][0] for k in std}
+    fee = std["shipping"] + std["fuel"] + std["stax"]
+    lines = []
+    for p in rep.get("parcels", []):
+        when = _loadsheet_when.get(str(p["cn"]))
+        if not when:
+            continue
+        bstart, blabel = _bill_week(when)
+        end_day = int(blabel.split("_to_")[1][:2])
+        week_end = date(bstart.year, bstart.month, end_day)
+        dd = _parse_any_date(p.get("delivered_on") or "") if p.get("state") == "delivered" else None
+        q = pays.get(str(p["cn"]))
+        if q and q["pay_status"] == "Paid":
+            cod, gst, itw = float(q["cod"] or 0), float(q["gst_wh"] or 0), float(q["it_wh"] or 0)
+        elif dd:
+            try:
+                cod = float(int(float(_order_totals.get(p["order"], 0))))
+            except (TypeError, ValueError):
+                cod = 0.0
+            gst = itw = round(cod * 0.02, 2)
+        else:
+            cod = gst = itw = 0.0
+        base = {"cn": p["cn"], "order": p["order"], "booked": p["booked"], "consignee": p.get("consignee") or "",
+                "route": "MUX - " + str(p.get("city") or ""), "weight": 0.5, "pay_date": (q or {}).get("pay_date", "")[:10] if q else ""}
+        if dd and dd <= week_end:
+            lines.append({**base, "week": blabel, "status": "Delivered", "cod": cod, "shipping": std["shipping"], "osa": 0.0,
+                          "gst_wh": gst, "it_wh": itw, "addl": 0.0, "net": round(cod - fee - gst - itw, 2),
+                          "when": week_end.isoformat()})
+        else:
+            st = {"returned": "Return To Shipper", "returning": "Return To Origin"}.get(p.get("state"), "InProcess")
+            lines.append({**base, "week": blabel, "status": st, "cod": 0.0, "shipping": std["shipping"], "osa": 0.0,
+                          "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0, "net": round(-fee, 2), "when": week_end.isoformat()})
+            if dd:  # delivered in a later week: COD line, fee already cut
+                dstart, dlabel = _week_of(dd)
+                lines.append({**base, "week": dlabel, "status": "Delivered", "cod": cod, "shipping": 0.0, "osa": 0.0,
+                              "gst_wh": gst, "it_wh": itw, "addl": 0.0, "net": round(cod - gst - itw, 2),
+                              "when": dd.isoformat()})
+    lines.sort(key=lambda l: (l["when"], str(l["cn"])), reverse=True)
+    return lines
+
+
+def _statement_html(rep: dict, esc) -> str:
+    lines = rep.get("statement", [])
+    try:
+        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
+            inv = {v["week"]: v for v in json.load(f).get("invoices", [])}
+    except (OSError, ValueError):
+        inv = {}
+    tot = {}
+    for l in lines:
+        tot.setdefault(l["week"], [0, 0.0])
+        tot[l["week"]][0] += 1
+        tot[l["week"]][1] += l["net"]
+    keys = ("cn", "order", "booked", "consignee", "route", "weight", "status", "cod", "shipping", "osa", "gst_wh",
+            "it_wh", "addl", "pay_date", "net")
+    heads = ("CN", "Reference", "Booking date", "Consignee", "Route", "Kg", "Status", "COD amount", "Shipping CHG",
+             "OSA", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Paid on", "Net payable")
+    check = "".join(
+        f"<tr><td><b>{esc(w)}</b></td><td>{n}</td><td>{net:,.2f}</td>"
+        f"<td>{('{:,}'.format(inv[w]['payable'])) if w in inv else 'no invoice entered'}</td>"
+        f"<td>{('{:,.2f}'.format(net - inv[w]['payable'])) if w in inv else ''}</td></tr>"
+        for w, (n, net) in sorted(tot.items(), reverse=True))
+    return (
+        "<div class='sec' id='sec-stmt'><h3>TCS payment statement (rebuilt line by line)</h3><p><small>Same layout as your "
+        "Payment Ledger Details. Lines are rebuilt from TCS parcel data using the pattern of your statement: the fee "
+        "(shipping + fuel + sales tax = 200.10) is cut in the parcel's pickup week, the COD line follows in the delivery week. "
+        "The check table compares each week's total with the TCS invoice.</small></p>"
+        "<div class='w'><table><tr><th>Billing week</th><th>Lines</th><th>Total of lines</th><th>TCS invoice payable</th>"
+        "<th>Difference</th></tr>" + check + "</table></div>"
+        "<div class='w'><table id='stmttbl'><tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "</tr>"
+        + _grouped_rows(lines, "week", keys, esc, len(keys) + 1) + "</table></div></div>"
+    )
+
+
 def _report_html(rep: dict, key: str) -> str:
     esc = html.escape
     total = rep["total"] or 1
@@ -1384,7 +1494,7 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div></div>"
         "<div class='sec' id='sec-status'><h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div></div>"
-        + _weekly_html(rep, esc) + _paysum_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
+        + _weekly_html(rep, esc) + _paysum_html(rep, esc) + _statement_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
         f"<div class='sec' id='sec-parcels'><h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table id='partbl'>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>Step time</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th>"
