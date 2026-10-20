@@ -869,6 +869,39 @@ def _shopify_orders_since(since_iso: str, fields: str, max_orders: int = 1500) -
     return out
 
 
+_loadsheet_cache = {}
+
+
+def _loadsheet_cns(d_from: date, d_to: date) -> list:
+    """Every CN TCS has on your load sheets (pickup lists) between two dates - this finds all booked parcels
+    whatever their reference is (#barkat..., NA, ...). The call accepts about 7 days at a time."""
+    today = datetime.now(timezone(timedelta(hours=DISPLAY_UTC_OFFSET_HOURS))).date()
+    d_to = min(d_to, today)
+    out, cur = [], d_from
+    while cur <= d_to:
+        end = min(cur + timedelta(days=6), d_to)
+        key = (cur.isoformat(), end.isoformat())
+        hit = _loadsheet_cache.get(key)
+        if hit and time.time() - hit[0] < 60:
+            out += hit[1]
+        else:
+            try:
+                bearer, ecom = _tcs_get_tokens("connect")
+                r = requests.get(f"{_tcs_base('connect')}/ecom/api/report/loadsheetlogs",
+                                 headers={"Authorization": f"Bearer {bearer}"},
+                                 params={"accesstoken": ecom, "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
+                                         "fromdate": key[0], "todate": key[1]}, timeout=(10, 60))
+                body = r.json() if r.ok else {}
+                cns = [str(x.get("consignmentno")) for sheet in (body.get("detail") or [])
+                       for x in (sheet.get("loadsheetdetails") or []) if x.get("consignmentno")]
+                _loadsheet_cache[key] = (time.time(), cns)
+                out += cns
+            except Exception:
+                log.exception("Load sheet lookup failed for %s", key)
+        cur = end + timedelta(days=1)
+    return list(dict.fromkeys(out))
+
+
 def _fetch_by_shopify_orders(d_from: date, d_to: date) -> tuple:
     """TCS tracking accepts our order reference (#000...), so every Shopify order
     that was booked with TCS is found without knowing its CN."""
@@ -884,7 +917,8 @@ def _fetch_by_shopify_orders(d_from: date, d_to: date) -> tuple:
     # not for names like #barkat1090 - those are found through their CN (cns.txt).
     have_cn = {str(x["cn by courier"]) for x in rows}
     with ThreadPoolExecutor(8) as ex:
-        cn_rows = [x for x in ex.map(_track_one, [c for c in _load_cns() if c not in have_cn]) if x]
+        wanted = list(dict.fromkeys(_load_cns() + _loadsheet_cns(d_from - timedelta(days=2), d_to)))
+        cn_rows = [x for x in ex.map(_track_one, [c for c in wanted if c not in have_cn]) if x]
     shop_names = {o["name"] for o in orders}
     for x in cn_rows:  # parcel whose reference is not one of our Shopify orders
         x["non_shopify"] = str(x.get("order no") or "") not in shop_names
