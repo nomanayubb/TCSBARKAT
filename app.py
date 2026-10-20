@@ -1152,7 +1152,7 @@ def _pay_summary(payments: list) -> list:
     No net amounts, no deductions and no invoices: TCS does not send those, so they are not shown."""
     def base(group, kind, items, note, cod=""):
         return {"group": group, "kind": kind, "parcels": len(items),
-                "orders": html.escape(", ".join(p["order"] for p in items[:6]) + (" ..." if len(items) > 6 else "")),
+                "orders": ", ".join(f"<b>{html.escape(p['order'])}</b>" for p in items[:6]) + (" ..." if len(items) > 6 else ""),
                 "products": _products_text([p["order"] for p in items]), "cod": cod, "gst_wh": "", "it_wh": "",
                 "note": note}
 
@@ -1180,11 +1180,11 @@ def _pay_summary(payments: list) -> list:
         for r in same:  # delivered in the week: fee and withholding cut together
             fee = (f"150 - fuel {m(r['fuel'])} - sales tax {m(r['stax'])}" if r["stax"] != "" else
                    f"{r['shipping']:g} - {m(r['fee'] - r['shipping'])} (fuel + sales tax)")
-            parts.append(f"<div>{esc(r['order'])} ({esc(prod(r['order']))}: COD {m(r['cod'])} - {fee} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>)</div>")
+            parts.append(f"<div><b>{esc(r['order'])}</b> ({esc(prod(r['order']))}: COD {m(r['cod'])} - {fee} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>)</div>")
         for r in advance:  # fee cut in advance: not delivered yet
-            parts.append(f"<div style='{RED}'>{esc(r['order'])} -{m(r['fee'])} (fee cut in advance)</div>")
+            parts.append(f"<div style='{RED}'><b>{esc(r['order'])}</b> -{m(r['fee'])} (fee cut in advance)</div>")
         for r in follow:  # delivered now, fee cut in an earlier week
-            parts.append(f"<div style='{BLUE}'>{esc(r['order'])} ({esc(prod(r['order']))}: COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
+            parts.append(f"<div style='{BLUE}'><b>{esc(r['order'])}</b> ({esc(prod(r['order']))}: COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
         try:
             pday = datetime.strptime(v["PAYMENTDATE"], "%d-%b-%Y").strftime("%d/%m/%Y")
         except ValueError:
