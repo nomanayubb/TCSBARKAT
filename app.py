@@ -1112,7 +1112,7 @@ def _pay_summary(payments: list) -> list:
         exp = 0.0
         for p in delivered_unpaid:
             try:
-                exp += float(_order_totals.get(p["order"], 0))
+                exp += int(float(_order_totals.get(p["order"], 0)))  # TCS collects whole rupees (1269.88 -> 1269), as on the paid parcels
             except (TypeError, ValueError):
                 pass
         r = row("Delivered, awaiting payment", "awaiting", delivered_unpaid,
