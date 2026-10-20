@@ -954,6 +954,10 @@ def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
 
 
 def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
+    try:
+        _envio_fresh()  # the payout table is built from the portal data, so read it first
+    except Exception:
+        log.exception("Envio read before report failed")
     rep = _build_report_core(d_from, d_to, extra)
     try:
         rep["statement"] = []  # removed: it was a reconstruction, not TCS data
@@ -1952,6 +1956,7 @@ def payments_json():
     if not rep:
         return jsonify({"loading": True, "error": _live["error"]}), 200
     pays = [p for p in rep.get("payments", []) if _in_range(p["booked"], request.args)]
+    _envio_fresh()
     return jsonify({"payments": pays, "totals": _pay_totals(pays),
                     "summary": _pay_summary(pays)}), 200
 
