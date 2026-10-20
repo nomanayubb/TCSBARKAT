@@ -956,7 +956,7 @@ def _fetch_via_tracking(d_from: date, d_to: date, extra: str = "") -> list:
 def _build_report(d_from: date, d_to: date, extra: str = "") -> dict:
     rep = _build_report_core(d_from, d_to, extra)
     try:
-        rep["statement"] = _statement_lines(rep)
+        rep["statement"] = []  # removed: it was a reconstruction, not TCS data
     except Exception:
         log.exception("Statement rebuild failed")
     return rep
@@ -1091,7 +1091,7 @@ REPORT_PARCELS_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(locatio
 REPORT_SUM_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'sumtbl\'); if(!tb) return;\nvar last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction num(v){return v==null||v===\'\'?\'\':Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}\nfunction cell(name,p,n){\n  switch(name){\n    case \'#\': return n;\n    case \'Payment\': return \'<b>\'+esc(p.group)+\'</b>\';\n    case \'Parcels\': return esc(p.parcels);\n    case \'Orders\': return esc(p.orders);\n    case \'Products\': return esc(p.products);\n    case \'COD\': return num(p.cod);\n    case \'Shipping CHG\': return num(p.shipping);\n    case \'Fuel\': return num(p.fuel);\n    case \'Sales tax\': return num(p.stax);\n    case \'GST WH 2%\': return num(p.gst_wh);\n    case \'IT WH 2%\': return num(p.it_wh);\n    case \'Total deducted\': return num(p.deductions);\n    case \'Net to receive\': return \'<b>\'+num(p.net)+\'</b>\';\n    case \'What it is\': return esc(p.note);\n  }\n  return \'\';\n}\nfunction render(d){\n  var names=Array.prototype.map.call(tb.rows[0].cells,label), body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  d.summary.forEach(function(p,i){\n    var r=document.createElement(\'tr\'); if(p.kind===\'total\') r.className=\'tot\';\n    r.innerHTML=names.map(function(nm){return \'<td>\'+cell(nm,p,i+1)+\'</td>\'}).join(\'\');\n    r._ord=i; body.appendChild(r);\n  });\n  if(window.__reportApply) window.__reportApply(tb);\n}\nfunction poll(){\n  var sec=tb.closest(\'.sec\'); if(document.hidden||(sec&&sec.style.display===\'none\')) return;\n  fetch(\'/payments.json?key=\'+encodeURIComponent(KEY)+\'&from=\'+encodeURIComponent((document.querySelector(\'input[name=from]\')||{}).value||\'\')+\'&to=\'+encodeURIComponent((document.querySelector(\'input[name=to]\')||{}).value||\'\'),{cache:\'no-store\'})\n    .then(function(r){return r.json()}).then(function(d){\n      if(!d.summary) return;\n      var sig=JSON.stringify(d.summary);\n      if(sig!==last){last=sig;render(d)}\n    }).catch(function(){});\n}\npoll(); setInterval(poll,1000);\n})();\n</script>\n'
 
 
-REPORT_PAY_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'paytbl\'); if(!tb) return;\nvar sumEl=document.getElementById(\'paysum\'), last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction num(v){return v==null||v===\'\'?\'\':Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}\nfunction cell(name,p,n){\n  switch(name){\n    case \'#\': return n;\n    case \'CN\': return esc(p.cn);\n    case \'Order\': return esc(p.order);\n    case \'Consignee\': return esc(p.consignee);\n    case \'Destination\': return esc(p.city);\n    case \'Kg\': return esc(p.weight);\n    case \'Status\': return esc(p.status);\n    case \'Payment\': return esc(p.pay_status);\n    case \'Paid on\': return esc(p.pay_date);\n    case \'COD amount\': return num(p.cod);\n    case \'Shipping CHG\': return num(p.shipping);\n    case \'Fuel\': return num(p.fuel);\n    case \'OSA\': return num(p.osa);\n    case \'Sales tax\': return num(p.stax);\n    case \'GST WH 2%\': return num(p.gst_wh);\n    case \'IT WH 2%\': return num(p.it_wh);\n    case \'Addl IT WH\': return num(p.addl);\n    case \'Net payable\': return \'<b>\'+num(p.net)+\'</b>\';\n    case \'Track\': return "<button class=\'eye\' title=\'Tracking history\' data-cn=\'"+esc(p.cn)+"\'>&#128065;</button>";\n  }\n  return \'\';\n}\nfunction render(d){\n  var open={};\n  Array.prototype.forEach.call(tb.rows,function(r){var e=r.querySelector(\'button.eye.on\');if(e)open[e.getAttribute(\'data-cn\')]=1});\n  var names=Array.prototype.map.call(tb.rows[0].cells,label), body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  var counts={}; d.payments.forEach(function(p){counts[p.booked]=(counts[p.booked]||0)+1});\n  var cur=null,n=0,k=1;\n  d.payments.forEach(function(p){\n    if(p.booked!==cur){\n      cur=p.booked;n=0;\n      var g=document.createElement(\'tr\'); g.className=\'grp\'; g.setAttribute(\'data-day\',cur);\n      g.innerHTML="<td colspan=\'"+names.length+"\' style=\'background:#eef;font-weight:bold\'>"+esc(cur)+" - "+counts[cur]+" parcels</td>";\n      g._ord=k++; body.appendChild(g);\n    }\n    n++;\n    var r=document.createElement(\'tr\'); r.setAttribute(\'data-day\',cur);\n    r.innerHTML=names.map(function(nm){return \'<td>\'+cell(nm,p,n)+\'</td>\'}).join(\'\');\n    r._ord=k++; body.appendChild(r);\n  });\n  if(window.__reportApply) window.__reportApply(tb);\n  tb.querySelectorAll(\'button.eye\').forEach(function(b){if(open[b.getAttribute(\'data-cn\')])b.click()});\n  if(sumEl){var t=d.totals; sumEl.innerHTML=\'COD <b>\'+num(t.cod)+\'</b> &middot; Shipping <b>\'+num(t.shipping)+\'</b> &middot; Fuel <b>\'+num(t.fuel)+\'</b> &middot; Sales tax <b>\'+num(t.stax)+\'</b> &middot; GST WH <b>\'+num(t.gst_wh)+\'</b> &middot; IT WH <b>\'+num(t.it_wh)+\'</b> &middot; Net payable <b>\'+num(t.net)+\'</b><br><small>Paid parcels: \'+t.paid+\' &middot; pending: \'+t.pending+\' &middot; updated \'+new Date().toLocaleTimeString()+\'</small>\'}\n}\nfunction poll(){\n  var sec=tb.closest(\'.sec\'); if(document.hidden||(sec&&sec.style.display===\'none\')) return;\n  fetch(\'/payments.json?key=\'+encodeURIComponent(KEY)+\'&from=\'+encodeURIComponent((document.querySelector(\'input[name=from]\')||{}).value||\'\')+\'&to=\'+encodeURIComponent((document.querySelector(\'input[name=to]\')||{}).value||\'\'),{cache:\'no-store\'})\n    .then(function(r){return r.json()}).then(function(d){\n      if(!d.payments) return;\n      var sig=JSON.stringify(d.payments);\n      if(sig!==last){last=sig;render(d)}\n    }).catch(function(){});\n}\npoll(); setInterval(poll,1000);\n})();\n</script>\n'
+REPORT_PAY_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'paytbl\'); if(!tb) return;\nvar sumEl=document.getElementById(\'paysum\'), last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction num(v){return v==null||v===\'\'?\'\':Number(v).toLocaleString(undefined,{maximumFractionDigits:2})}\nfunction cell(name,p,n){\n  switch(name){\n    case \'#\': return n;\n    case \'CN\': return esc(p.cn);\n    case \'Order\': return esc(p.order);\n    case \'Consignee\': return esc(p.consignee);\n    case \'Destination\': return esc(p.city);\n    case \'Kg\': return esc(p.weight);\n    case \'Status\': return esc(p.status);\n    case \'Payment\': return esc(p.pay_status);\n    case \'Paid on\': return esc(p.pay_date);\n    case \'COD amount\': return num(p.cod);\n    case \'Shipping CHG\': return num(p.shipping);\n    case \'Fuel\': return num(p.fuel);\n    case \'OSA\': return num(p.osa);\n    case \'Sales tax\': return num(p.stax);\n    case \'GST WH 2%\': return num(p.gst_wh);\n    case \'IT WH 2%\': return num(p.it_wh);\n    case \'Addl IT WH\': return num(p.addl);\n    case \'Net payable\': return \'<b>\'+num(p.net)+\'</b>\';\n    case \'Track\': return "<button class=\'eye\' title=\'Tracking history\' data-cn=\'"+esc(p.cn)+"\'>&#128065;</button>";\n  }\n  return \'\';\n}\nfunction render(d){\n  var open={};\n  Array.prototype.forEach.call(tb.rows,function(r){var e=r.querySelector(\'button.eye.on\');if(e)open[e.getAttribute(\'data-cn\')]=1});\n  var names=Array.prototype.map.call(tb.rows[0].cells,label), body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  var counts={}; d.payments.forEach(function(p){counts[p.booked]=(counts[p.booked]||0)+1});\n  var cur=null,n=0,k=1;\n  d.payments.forEach(function(p){\n    if(p.booked!==cur){\n      cur=p.booked;n=0;\n      var g=document.createElement(\'tr\'); g.className=\'grp\'; g.setAttribute(\'data-day\',cur);\n      g.innerHTML="<td colspan=\'"+names.length+"\' style=\'background:#eef;font-weight:bold\'>"+esc(cur)+" - "+counts[cur]+" parcels</td>";\n      g._ord=k++; body.appendChild(g);\n    }\n    n++;\n    var r=document.createElement(\'tr\'); r.setAttribute(\'data-day\',cur);\n    r.innerHTML=names.map(function(nm){return \'<td>\'+cell(nm,p,n)+\'</td>\'}).join(\'\');\n    r._ord=k++; body.appendChild(r);\n  });\n  if(window.__reportApply) window.__reportApply(tb);\n  tb.querySelectorAll(\'button.eye\').forEach(function(b){if(open[b.getAttribute(\'data-cn\')])b.click()});\n  if(sumEl){var t=d.totals; sumEl.innerHTML=\'COD <b>\'+num(t.cod)+\'</b> &middot; Shipping <b>\'+num(t.shipping)+\'</b> &middot; Fuel <b>\'+num(t.fuel)+\'</b> &middot; Sales tax <b>\'+num(t.stax)+\'</b> &middot; GST WH <b>\'+num(t.gst_wh)+\'</b> &middot; IT WH <b>\'+num(t.it_wh)+\'</b><br><small>Paid parcels: \'+t.paid+\' &middot; pending: \'+t.pending+\' &middot; updated \'+new Date().toLocaleTimeString()+\'</small>\'}\n}\nfunction poll(){\n  var sec=tb.closest(\'.sec\'); if(document.hidden||(sec&&sec.style.display===\'none\')) return;\n  fetch(\'/payments.json?key=\'+encodeURIComponent(KEY)+\'&from=\'+encodeURIComponent((document.querySelector(\'input[name=from]\')||{}).value||\'\')+\'&to=\'+encodeURIComponent((document.querySelector(\'input[name=to]\')||{}).value||\'\'),{cache:\'no-store\'})\n    .then(function(r){return r.json()}).then(function(d){\n      if(!d.payments) return;\n      var sig=JSON.stringify(d.payments);\n      if(sig!==last){last=sig;render(d)}\n    }).catch(function(){});\n}\npoll(); setInterval(poll,1000);\n})();\n</script>\n'
 
 
 REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f3f3f3;border-radius:6px}\n#tablebar label{margin-right:14px;white-space:nowrap;cursor:pointer}\n.pager{margin:4px 0 6px;font-size:14px}\n.pager button{padding:2px 10px;margin:0 3px;cursor:pointer}\n.pager select{padding:2px 4px}\n@media (prefers-color-scheme:dark){#tablebar{background:#222}}\n</style>\n<script>\n(function(){\nvar secs=Array.prototype.slice.call(document.querySelectorAll(\'.sec\'));\nvar TITLES={\'sec-date\':\'Per date\',\'sec-status\':\'Status summary\',\'sec-returns\':\'Return analysis\',\'sec-week\':\'Per week\',\'sec-paysum\':\'TCS payout\',\'sec-stmt\':\'Statement\',\'sec-payments\':\'Payments\',\'sec-parcels\':\'All parcels\',\'sec-nonshopify\':\'Non-Shopify\',\'sec-unbooked\':\'Not booked\'};\nvar saved={}; try{saved=JSON.parse(localStorage.getItem(\'rtables\')||\'{}\')}catch(e){}\nvar bar=document.createElement(\'div\'); bar.id=\'tablebar\';\nbar.innerHTML=\'<b>Tables shown:</b> \';\nsecs.forEach(function(sec){\n  var on=saved[sec.id]!==false;\n  var lb=document.createElement(\'label\'); var cb=document.createElement(\'input\'); cb.type=\'checkbox\'; cb.checked=on;\n  lb.appendChild(cb); lb.appendChild(document.createTextNode(\' \'+(TITLES[sec.id]||sec.id)));\n  bar.appendChild(lb); sec.style.display=on?\'\':\'none\';\n  cb.addEventListener(\'change\',function(){\n    sec.style.display=cb.checked?\'\':\'none\'; saved[sec.id]=cb.checked;\n    try{localStorage.setItem(\'rtables\',JSON.stringify(saved))}catch(e){}\n  });\n});\nvar mb=document.getElementById(\'modebar\'); if(mb) mb.parentNode.insertBefore(bar,mb); else document.body.insertBefore(bar,document.body.firstChild);\n\nvar SIZES=[10,25,50,100,300,500,0];\nvar size=300; try{size=parseInt(localStorage.getItem(\'rsize2\')||\'300\',10)}catch(e){}\nfunction isData(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')}\nfunction paginate(tb){\n  if(!tb._pager) return;\n  var rows=Array.prototype.slice.call(tb.rows,1);\n  var total=rows.filter(isData).length;\n  var sz=tb._size, pages=sz?Math.max(1,Math.ceil(total/sz)):1;\n  if(tb._page>=pages) tb._page=pages-1; if(tb._page<0) tb._page=0;\n  var start=sz?tb._page*sz:0, end=sz?start+sz:total+1, idx=0, lastVisible=true;\n  var grpRow=null, grpHasVisible=false;\n  function flushGrp(){ if(grpRow) grpRow.style.display=grpHasVisible?\'\':\'none\' }\n  rows.forEach(function(r){\n    if(r.classList.contains(\'grp\')){\n      flushGrp(); grpHasVisible=false;\n      if(r._hid){grpRow=null;return}\n      grpRow=r;\n    } else if(isData(r)){\n      var vis=idx>=start&&idx<end; idx++;\n      r.style.display=vis?\'\':\'none\'; lastVisible=vis; if(vis) grpHasVisible=true;\n    } else if(r.classList.contains(\'det\')){\n      r.style.display=lastVisible?\'\':\'none\';\n    }\n  });\n  flushGrp();\n  var p=tb._pager;\n  p.querySelector(\'.pinfo\').textContent=total?(\'Showing \'+(Math.min(start+1,total))+\' to \'+Math.min(end,total)+\' of \'+total+\' entries - page \'+(tb._page+1)+\' of \'+pages):\'No entries\';\n  p.querySelector(\'.pprev\').disabled=tb._page<=0; p.querySelector(\'.pnext\').disabled=tb._page>=pages-1;\n}\nwindow.__paginate=paginate;\ndocument.querySelectorAll(\'.sec .w table\').forEach(function(tb){\n  var wrap=tb.parentElement; if(wrap.parentElement.querySelector(\'.pager\')) return;\n  var p=document.createElement(\'div\'); p.className=\'pager\';\n  p.innerHTML=\'Show <select class="psize">\'+SIZES.map(function(s){return \'<option value="\'+s+\'"\'+(s===size?\' selected\':\'\')+\'>\'+(s||\'All\')+\'</option>\'}).join(\'\')+\'</select> entries \'+\n    \'<button class="pprev">&laquo; Prev</button><button class="pnext">Next &raquo;</button> <span class="pinfo"></span>\';\n  wrap.parentNode.insertBefore(p,wrap);\n  tb._pager=p; tb._size=size; tb._page=0;\n  p.querySelector(\'.psize\').addEventListener(\'change\',function(e){\n    size=parseInt(e.target.value,10); try{localStorage.setItem(\'rsize2\',String(size))}catch(x){}\n    document.querySelectorAll(\'.sec .w table\').forEach(function(t){ if(t._pager){t._size=size;t._page=0;t._pager.querySelector(\'.psize\').value=String(size);paginate(t)} });\n  });\n  p.querySelector(\'.pprev\').addEventListener(\'click\',function(){tb._page--;paginate(tb)});\n  p.querySelector(\'.pnext\').addEventListener(\'click\',function(){tb._page++;paginate(tb)});\n  paginate(tb);\n});\n})();\n</script>\n'
@@ -1139,82 +1139,34 @@ def _products_text(orders: list) -> str:
 
 
 def _pay_summary(payments: list) -> list:
-    """The payout table. Only figures TCS itself states are shown as facts: its weekly invoices (payable, paid,
-    withholding), the COD collected, and the money in your bank. Per-parcel charges are NOT itemised by TCS in the
-    data we can read, so deductions are shown as one amount (COD minus what TCS paid)."""
-    def money(x):
-        return round(float(x or 0), 2)
-
-    def base(group, kind, items, note):
+    """Only facts TCS sends per parcel: which parcels it paid, on which date, and the COD amount it recorded.
+    No net amounts, no deductions and no invoices: TCS does not send those, so they are not shown."""
+    def base(group, kind, items, note, cod=""):
         return {"group": group, "kind": kind, "parcels": len(items),
                 "orders": ", ".join(p["order"] for p in items[:6]) + (" ..." if len(items) > 6 else ""),
-                "products": _products_text([p["order"] for p in items]), "cod": "", "shipping": "", "fuel": "",
-                "stax": "", "gst_wh": "", "it_wh": "", "deductions": "", "net": "", "note": note}
+                "products": _products_text([p["order"] for p in items]), "cod": cod, "gst_wh": "", "it_wh": "",
+                "note": note}
 
-    try:
-        with open(os.path.join(os.path.dirname(os.path.abspath(__file__)), "received.json"), encoding="utf-8") as f:
-            ledger = json.load(f)
-    except (OSError, ValueError):
-        ledger = {}
-    inv, got = ledger.get("invoices", []), ledger.get("received", [])
     out = []
     paid = [p for p in payments if p["pay_status"] == "Paid"]
-
-    for v in inv:
-        try:
-            day = datetime.strptime(v["paid_date"], "%d-%b-%Y").strftime("%d/%m/%Y")
-        except ValueError:
-            day = ""
-        items = [p for p in paid if p["pay_date"][:10] == day]
-        r = base(f"TCS INVOICE {v['week']} - paid {v['paid_date']}", "invoice", items,
-                 f"TCS's own invoice (dated {v['invoice_date']}): payable {v['payable']:,}, paid {v['paid']:,}. "
-                 "The COD is what TCS collected for the parcels paid that day; the rest is TCS's charges for the whole week "
-                 "(including parcels that were returned or not delivered) plus the 2% + 2% withholding.")
-        cod = money(sum(p["cod"] for p in items))
-        r.update(cod=cod, gst_wh=float(v["wht_st"]), it_wh=float(v["wht_it"]),
-                 deductions=round(cod - float(v["paid"]), 2) if items else "", net=float(v["paid"]))
+    days = sorted({p["pay_date"][:10] for p in paid}, key=lambda d: d[6:10] + d[3:5] + d[:2])
+    for d in days:
+        items = [p for p in paid if p["pay_date"][:10] == d]
+        r = base(f"Paid on {d}", "paid", items, "Parcels TCS marks as paid on this date, with the COD amount it recorded.",
+                 cod=round(sum(float(p["cod"] or 0) for p in items), 2))
+        r["gst_wh"] = round(sum(float(p["gst_wh"] or 0) for p in items), 2)
+        r["it_wh"] = round(sum(float(p["it_wh"] or 0) for p in items), 2)
         out.append(r)
-
-    for g in got:
-        r = base(f"RECEIVED IN BANK {g['at']}", "received", [], g.get("note", ""))
-        r["net"] = round(float(g["amount"]), 2)
-        out.append(r)
-
-    if inv:
-        paid_inv = round(sum(float(v["paid"]) for v in inv), 2)
-        out.append({**base("TOTAL PAID per TCS invoices", "total", [], "Sum of the invoice rows above."),
-                    "net": paid_inv})
-        if got:
-            rec = round(sum(float(g["amount"]) for g in got), 2)
-            out.append({**base("BANK minus INVOICES", "total", [],
-                               f"Bank {rec:,.2f} vs invoices paid {paid_inv:,.2f}. Week 08-14 Oct matches exactly; the first "
-                               "bank payment (15 Oct) is higher than the 01-07 Oct invoice - ask TCS what the extra covers."),
-                        "net": round(rec - paid_inv, 2)})
-
     waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
     if waiting:
-        exp = 0
-        for p in waiting:
-            try:
-                exp += int(float(_order_totals.get(p["order"], 0)))  # TCS collects whole rupees
-            except (TypeError, ValueError):
-                pass
-        r = base("Delivered, waiting for TCS to pay", "awaiting", waiting,
-                 "COD TCS has collected or will collect for these delivered parcels (your Shopify total in whole rupees). "
-                 "This is BEFORE TCS's deductions: its charges and withholding are only known when the invoice is issued, "
-                 "so no net amount is shown.")
-        r["cod"] = exp
-        out.append(r)
-
+        out.append(base("Delivered, not paid yet", "awaiting", waiting,
+                        "TCS shows these as delivered with no payment date yet."))
     back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
     if back:
-        out.append(base("Returned / refused", "charges", back,
-                        "No COD comes. TCS still charges for these parcels (your ledger shows them as negative lines) and the "
-                        "charge is taken from the weekly payment. Return charges are not refunded. Exact amount: see the invoice."))
+        out.append(base("Returned / refused", "charges", back, "No COD. TCS has not paid anything for these."))
     moving = [p for p in payments if p["pay_status"] != "Paid" and p["state"] not in ("delivered", "returned", "returning", "rejected")]
     if moving:
-        out.append(base("In transit", "charges", moving,
-                        "Not delivered yet. COD is added when delivered; if the parcel comes back the charge stays."))
+        out.append(base("In transit", "charges", moving, "Not delivered yet."))
     return out
 
 
@@ -1284,20 +1236,15 @@ def _weekly_html(rep: dict, esc) -> str:
                     except (TypeError, ValueError):
                         pass
     heads = ("Billing week", "Booked", "In transit", "Refused", "Return to shipper", "Returning", "Delivered in week",
-             "COD paid out", "COD waiting", "Invoice payable", "Invoice paid on", "Withholding")
+             "COD paid out", "COD waiting")
     body = ""
     for i, (start, r) in enumerate(sorted(w.items(), reverse=True), 1):
-        v = inv.get(r["label"])
         body += (f"<tr><td>{i}</td><td><b>{esc(r['label'])}</b></td><td>{r['booked']}</td><td>{r['in_progress']}</td>"
                  f"<td>{r['rejected']}</td><td>{r['returned']}</td><td>{r['returning']}</td><td>{r['dparcels']}</td>"
-                 f"<td>{r['paid_cod']:,.2f}</td><td>{r['wait_cod']:,.2f}</td>"
-                 f"<td>{('{:,}'.format(v['payable'])) if v else 'no invoice entered'}</td>"
-                 f"<td>{esc(v['paid_date']) if v else ''}</td>"
-                 f"<td>{('{:,.0f}'.format(v['wht_it'] + v['wht_st'] + (v.get('addl') or 0))) if v else ''}</td></tr>")
+                 f"<td>{r['paid_cod']:,.2f}</td><td>{r['wait_cod']:,.2f}</td></tr>")
     return (
         "<div class='sec' id='sec-week'><h3>Week by week</h3><p><small>Weeks are TCS's billing weeks. Parcels are counted in "
-        "their booking week; COD in the week the parcel was delivered. Invoice columns come from the TCS ledger rows "
-        "entered by hand (TCS gives no API for them).</small></p>"
+        "their booking week; COD in the week the parcel was delivered. All figures are TCS parcel data.</small></p>"
         "<div class='w'><table id='wktbl'><tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "</tr>"
         + body + "</table></div></div>"
     )
@@ -1305,15 +1252,14 @@ def _weekly_html(rep: dict, esc) -> str:
 
 def _paysum_html(rep: dict, esc) -> str:
     rows = rep.get("pay_summary", [])
-    heads = ("Payment", "Parcels", "Orders", "Products", "COD", "Shipping CHG", "Fuel", "Sales tax", "GST WH 2%", "IT WH 2%",
-             "Total deducted", "Net to receive", "What it is")
-    keys = ("group", "parcels", "orders", "products", "cod", "shipping", "fuel", "stax", "gst_wh", "it_wh", "deductions", "net", "note")
+    heads = ("Payment", "Parcels", "Orders", "Products", "COD", "GST WH 2%", "IT WH 2%", "What it is")
+    keys = ("group", "parcels", "orders", "products", "cod", "gst_wh", "it_wh", "note")
     body = "".join(
         "<tr" + (" class='tot'" if r["kind"] == "total" else "") + f"><td>{i}</td>"
         + "".join(f"<td>{esc(str(r.get(k, '')))}</td>" for k in keys) + "</tr>"
         for i, r in enumerate(rows, 1))
     return (
-        "<div class='sec' id='sec-paysum'><h3>What TCS pays you and what it deducts</h3><div class='w'><table id='sumtbl'>"
+        "<div class='sec' id='sec-paysum'><h3>What TCS has paid you (TCS data only)</h3><div class='w'><table id='sumtbl'>"
         "<tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "</tr>" + body + "</table></div></div>"
     )
 
@@ -1322,16 +1268,16 @@ def _payments_html(rep: dict, esc) -> str:
     pays = rep.get("payments", [])
     t = _pay_totals(pays)
     keys = ("cn", "order", "consignee", "city", "weight", "status", "pay_status", "pay_date", "cod", "shipping",
-            "fuel", "osa", "stax", "gst_wh", "it_wh", "addl", "net")
+            "fuel", "osa", "stax", "gst_wh", "it_wh", "addl")
     heads = ("CN", "Order", "Consignee", "Destination", "Kg", "Status", "Payment", "Paid on", "COD amount",
-             "Shipping CHG", "Fuel", "OSA", "Sales tax", "GST WH 2%", "IT WH 2%", "Addl IT WH", "Net payable")
+             "Shipping CHG", "Fuel", "OSA", "Sales tax", "GST WH 2%", "IT WH 2%", "Addl IT WH")
     return (
         f"<div class='sec' id='sec-payments'><h3>Payment details ({len(pays)})</h3>"
         "<p><small>Per-parcel figures as TCS's ledger lists them (the charges are the same flat amount on every parcel). "
         "TCS pays by weekly invoice and its invoice totals differ - see the payout table above.</small></p>"
         f"<p id='paysum'>COD <b>{t['cod']:,.2f}</b> &middot; Shipping <b>{t['shipping']:,.2f}</b> &middot; "
         f"Fuel <b>{t['fuel']:,.2f}</b> &middot; Sales tax <b>{t['stax']:,.2f}</b> &middot; GST WH <b>{t['gst_wh']:,.2f}</b> "
-        f"&middot; IT WH <b>{t['it_wh']:,.2f}</b> &middot; Net payable <b>{t['net']:,.2f}</b></p><div class='w'><table id='paytbl'>"
+        f"&middot; IT WH <b>{t['it_wh']:,.2f}</b></p><div class='w'><table id='paytbl'>"
         "<tr><th>#</th>" + "".join(f"<th>{h}</th>" for h in heads) + "<th>Track</th></tr>"
         + _grouped_rows(pays, "booked", keys, esc, len(keys) + 2, eye_key="cn")
         + "</table></div></div>"
@@ -1468,8 +1414,8 @@ def _report_html(rep: dict, key: str) -> str:
     )
     parcel_rows = _grouped_rows(rep["parcels"], "booked",
                                 ("cn", "booked", "delivered_on", "status", "last_time", "city", "order",
-                                 "product", "weight", "pay_status", "pay_date", "cod", "shipping", "fuel", "stax", "gst_wh", "it_wh",
-                                 "net"), esc, 20, eye_key="cn")
+                                 "product", "weight", "pay_status", "pay_date", "cod", "shipping", "fuel", "stax", "gst_wh", "it_wh"),
+                                esc, 19, eye_key="cn")
     date_rows += (f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td>"
                   + "".join(f"<td><b>{rep['status_totals'][c]}</b></td>" for c in cols) + "<td></td></tr>")
     status_rows += f"<tr class='tot'><td><b>Total</b></td><td><b>{rep['total']}</b></td><td></td></tr>"
@@ -1497,11 +1443,11 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div></div>"
         "<div class='sec' id='sec-status'><h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div></div>"
-        + _weekly_html(rep, esc) + _paysum_html(rep, esc) + _statement_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
+        + _weekly_html(rep, esc) + _paysum_html(rep, esc) + _payments_html(rep, esc) + _returns_html(rep, esc) +
         f"<div class='sec' id='sec-parcels'><h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table id='partbl'>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>Step time</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th>"
-        "<th>Shipping CHG</th><th>Fuel</th><th>Sales tax</th><th>GST WH 2%</th><th>IT WH 2%</th><th>Net payable</th><th>Track</th></tr>"
+        "<th>Shipping CHG</th><th>Fuel</th><th>Sales tax</th><th>GST WH 2%</th><th>IT WH 2%</th><th>Track</th></tr>"
         f"{parcel_rows}</table></div></div>"
         f"<div class='sec' id='sec-nonshopify'><h3>Non-Shopify orders ({len(rep.get('non_shopify', []))})</h3><div class='w'><table>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Status</th><th>City</th><th>Reference</th><th>Last event</th><th>Track</th></tr>"
