@@ -1187,6 +1187,12 @@ def _pay_summary(payments: list) -> list:
         follow = [r for r in rows if r["kind"] == "follow" and r["cod"] > 0]
         advance = [r for r in rows if r["kind"] == "advance"]
         zero = [r for r in rows if r["kind"] == "follow" and r["cod"] <= 0]
+
+        def nkey(r):  # natural order of the order number: #00011056 < #00011059 < #00011062 ...
+            mo = re.search(r"(\d+)$", r["order"])
+            return (re.sub(r"\d+$", "", r["order"]), int(mo.group(1)) if mo else 0)
+        for grp in (same, follow, advance, zero):  # one shared order for Orders, Products and Net payable
+            grp.sort(key=nkey)
         parts, pparts = [], []
         for r in follow:  # delivered now, fee cut in an earlier week
             pparts.append(f"<div style='{BLUE}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
