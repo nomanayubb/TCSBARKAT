@@ -1195,7 +1195,7 @@ def _pay_summary(payments: list) -> list:
             parts.append(f"<div>{len(parts) + 1}. <b>{esc(r['order'])}</b> (COD {m(r['cod'])} - {fee} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>)</div>")
         for r in advance:  # fee cut in advance: not delivered yet
             pparts.append(f"<div style='{RED}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
-            parts.append(f"<div style='{RED}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> -{m(r['fee'])} (fee cut in advance)</div>")
+            parts.append(f"<div style='{RED}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> -{m(r['fee'])} (fee cut; TCS status: {esc(r['status'])})</div>")
         for r in follow:  # delivered now, fee cut in an earlier week
             pparts.append(f"<div style='{BLUE}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
             parts.append(f"<div style='{BLUE}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
