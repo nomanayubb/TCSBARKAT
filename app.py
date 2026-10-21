@@ -1225,6 +1225,16 @@ def _pay_summary(payments: list) -> list:
                   + (f"<div style='{BROWN}'>Returned, no new cut = {' + '.join('0.00' for _ in zero)} = <b>0.00</b></div>" if zero else "")
                   + f"<div>Amount to be paid: {f2(dsum)} - {f2(asum)} = <b>{f2(round(dsum - asum, 2))}</b></div>"
                   f"<div><small>TCS invoice payable: {esc(str(v.get('AMOUNTPAYABLE', '')))}</small></div>")
+        # self-check: every statement line of the week must have been classified and counted
+        week_lines = [l for l in (_envio_data.get("lines") or []) if l["_week"] == w]
+        classified = len(same) + len(follow) + len(advance) + len(zero)
+        if len(week_lines) != classified:
+            netpay += (f"<div style='{RED}'><b>CHECK:</b> TCS has {len(week_lines)} lines for this week but {classified} were "
+                       "classified. Look at this week in the TCS payment ledger section.</div>")
+        sum_lines = round(sum(_num(l.get("BalPayable")) for l in week_lines), 2)
+        if abs(sum_lines - round(dsum - asum, 2)) > 0.05:
+            netpay += (f"<div style='{RED}'><b>CHECK:</b> the lines add up to {f2(sum_lines)} in the TCS statement, "
+                       f"not {f2(round(dsum - asum, 2))}.</div>")
         # the confirmation is written only when the ledger really carries a payment date
         label = (f"<b>Weekly report</b><br>{esc(w)}<br>(confirmed by TCS,<br>paid on {esc(pday)})"
                  if (v.get("PAYMENTDATE") and pday) else f"<b>Weekly report</b><br>{esc(w)}<br>(not paid yet)")
