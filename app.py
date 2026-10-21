@@ -1113,6 +1113,9 @@ REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f
 REPORT_INL_JS = '<style>\nbutton.inl{margin-left:6px;border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:0 6px}\nbutton.inl.on{background:#222;color:#fff}\ndiv.inlp{margin:4px 0 8px 18px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;background:#fafafa;font-size:13px}\ndiv.inlp table{margin:4px 0}\n@media (prefers-color-scheme:dark){button.inl{background:#222;color:#eee}div.inlp{background:#1b1b1b;border-color:#444}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction showTrack(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No tracking data from TCS yet\')+\'</i>\';\n  var h=\'<b>\'+esc(d.cn)+\'</b> \'+esc(d.reference||\'\')+\' \'+esc(d.origin||\'\')+\' &rarr; \'+esc(d.destination||\'\');\n  if(d.summary) h+=\'<br><b>\'+esc(d.summary)+\'</b>\';\n  h+=\'<table><tr><th>When</th><th>Step</th><th>Place / person</th></tr>\';\n  (d.steps||[]).forEach(function(x){h+=\'<tr><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.status)+\'</td><td>\'+esc(x.by)+\'</td></tr>\'});\n  return h+\'</table>\';\n}\nfunction showReturn(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No data\')+\'</i>\';\n  var h=\'<table>\'; d.fields.forEach(function(f){h+=\'<tr><th>\'+esc(f[0])+\'</th><td>\'+esc(f[1])+\'</td></tr>\'}); return h+\'</table>\';\n}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.inl\'); if(!b) return;\n  var item=b.closest(\'div\'); if(!item) return;\n  var open=item.nextElementSibling;\n  var same=open&&open.classList&&open.classList.contains(\'inlp\')&&open.getAttribute(\'data-t\')===b.getAttribute(\'data-t\');\n  if(open&&open.classList&&open.classList.contains(\'inlp\')){clearInterval(open._iv);open.remove();item.querySelectorAll(\'button.inl.on\').forEach(function(x){x.classList.remove(\'on\')}); if(same) return}\n  var box=document.createElement(\'div\'); box.className=\'inlp\'; box.setAttribute(\'data-t\',b.getAttribute(\'data-t\')); box.textContent=\'Loading...\';\n  item.after(box); b.classList.add(\'on\');\n  var cn=b.getAttribute(\'data-cn\'), t=b.getAttribute(\'data-t\');\n  function load(){\n    var url=t===\'gl\'?\'/return-detail.json?key=\'+encodeURIComponent(KEY)+\'&cn=\'+encodeURIComponent(cn)+\'&sr=\':\'/track.json?key=\'+encodeURIComponent(KEY)+\'&q=\'+encodeURIComponent(cn);\n    fetch(url,{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n      box.innerHTML=(t===\'gl\'?showReturn(d):showTrack(d))+\'<small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 10 seconds</small>\';\n    }).catch(function(){box.textContent=\'Connection problem, retrying...\'});\n  }\n  load(); box._iv=setInterval(function(){ if(!document.body.contains(box)){clearInterval(box._iv);return} load() },10000);\n});\n})();\n</script>\n'
 
 
+REPORT_LST_JS = "<style>\ndiv.lstbar{margin-top:6px}\nbutton.lst{margin:2px 4px 2px 0;border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:1px 8px;font-size:12px}\nbutton.lst.on{background:#222;color:#fff}\n@media (prefers-color-scheme:dark){button.lst{background:#222;color:#eee}}\n</style>\n<script>\n(function(){\nfunction renumber(cell){\n  var n=0; Array.prototype.forEach.call(cell.querySelectorAll('div[data-list]'),function(d){\n    if(d.style.display==='none') return; n++; var s=d.querySelector('span.no'); if(s) s.textContent=n });\n}\ndocument.addEventListener('click',function(e){\n  var b=e.target.closest('button.lst'); if(!b) return;\n  var tr=b.closest('tr'); if(!tr) return;\n  var want=b.getAttribute('data-l');\n  tr.querySelectorAll('button.lst').forEach(function(x){x.classList.toggle('on',x===b)});\n  tr.querySelectorAll('div[data-list]').forEach(function(d){\n    d.style.display=(want==='all'||d.getAttribute('data-list')===want)?'':'none';\n  });\n  Array.prototype.forEach.call(tr.cells,renumber);\n});\n})();\n</script>\n"
+
+
 REPORT_SORT_JS = '<style>th{cursor:pointer;user-select:none;white-space:nowrap}th.over{outline:2px dashed #888}th .ar{font-size:10px;color:#666}\n#modebar button{padding:5px 12px;border:1px solid #888;background:#fff;cursor:pointer}#modebar button.on{background:#222;color:#fff}</style>\n<script>\n(function(){\nvar mode=\'date\'; try{mode=localStorage.getItem(\'rmode\')||\'date\'}catch(e){}\nfunction val(td){var t=td.textContent.trim();var n=parseFloat(t.replace(/,/g,\'\'));return (t!==\'\'&&!isNaN(n)&&/^[\\d.,\\-\\s]+$/.test(t))?[0,n]:[1,t.toLowerCase()]}\nfunction cmp(i,d){return function(a,b){var x=val(a.cells[i]),y=val(b.cells[i]);var c=x[0]-y[0]||(x[1]<y[1]?-1:x[1]>y[1]?1:0);return d===\'asc\'?c:-c}}\nfunction numCol(head){var nc=-1;Array.prototype.forEach.call(head.cells,function(h,k){if(h.textContent.replace(/[▲▼\\s]/g,\'\')===\'#\')nc=k});return nc}\nfunction apply(tb){try{apply0(tb)}finally{if(window.__paginate)window.__paginate(tb)}}function apply0(tb){\n  var head=tb.rows[0], st=tb._sort, body=tb.tBodies[0]||tb;\n  var all=Array.prototype.slice.call(tb.rows,1);\n  var data=all.filter(function(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')});\n  var tots=all.filter(function(r){return r.classList.contains(\'tot\')});\n  var grps=all.filter(function(r){return r.classList.contains(\'grp\')});\n  var nc=numCol(head);\n  function order(rows){ if(st&&st.th.parentNode===head){rows=rows.slice().sort(cmp(st.th.cellIndex,st.d))}else{rows=rows.slice().sort(function(a,b){return a._ord-b._ord})} return rows}\n  if(mode===\'date\'&&grps.length){\n    grps.forEach(function(g){g.style.display=\'\';g._hid=false;body.appendChild(g);\n      var rows=order(data.filter(function(r){return r.getAttribute(\'data-day\')===g.getAttribute(\'data-day\')}));\n      rows.forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1})});\n  }else{\n    grps.forEach(function(g){g.style.display=\'none\';g._hid=true});\n    order(data).forEach(function(r,k){body.appendChild(r);if(r._det)body.appendChild(r._det);if(r._gdet)body.appendChild(r._gdet);if(nc>=0)r.cells[nc].textContent=k+1});\n  }\n  tots.forEach(function(r){body.appendChild(r)});\n  Array.prototype.forEach.call(head.cells,function(h){h.innerHTML=h.textContent.replace(/[▲▼\\s]+$/,\'\')});\n  if(st&&st.th.parentNode===head)st.th.innerHTML=st.th.textContent+\' <span class="ar">\'+(st.d===\'asc\'?\'▲\':\'▼\')+\'</span>\';\n}\nvar tables=Array.prototype.slice.call(document.querySelectorAll(\'.w table\'));window.__reportApply=apply;\ntables.forEach(function(tb){\n  var head=tb.rows[0]; if(!head) return;\n  Array.prototype.forEach.call(tb.rows,function(r,k){r._ord=k});\n  Array.prototype.forEach.call(head.cells,function(th){th.draggable=true});\n  head.addEventListener(\'click\',function(e){\n    var th=e.target.closest(\'th\'); if(!th) return;\n    var d=(tb._sort&&tb._sort.th===th&&tb._sort.d===\'asc\')?\'desc\':\'asc\';\n    tb._sort={th:th,d:d}; apply(tb);\n  });\n  var from=null;\n  head.addEventListener(\'dragstart\',function(e){var th=e.target.closest(\'th\');if(th){from=th.cellIndex;e.dataTransfer.setData(\'text\',\'c\')}});\n  head.addEventListener(\'dragover\',function(e){var th=e.target.closest(\'th\');if(th){e.preventDefault();th.classList.add(\'over\')}});\n  head.addEventListener(\'dragleave\',function(e){var th=e.target.closest(\'th\');if(th)th.classList.remove(\'over\')});\n  head.addEventListener(\'drop\',function(e){\n    e.preventDefault(); var th=e.target.closest(\'th\'); if(!th||from===null) return; th.classList.remove(\'over\');\n    var to=th.cellIndex; if(to===from) return;\n    Array.prototype.forEach.call(tb.rows,function(r){\n      if(r.cells.length<=Math.max(from,to)) return;\n      var c=r.cells[from]; var ref=r.cells[to]; r.insertBefore(c, to>from?ref.nextSibling:ref);\n    });\n    from=null;\n  });\n});\nfunction setMode(m){\n  mode=m; try{localStorage.setItem(\'rmode\',m)}catch(e){}\n  document.querySelectorAll(\'#modebar button\').forEach(function(b){b.classList.toggle(\'on\',b.getAttribute(\'data-m\')===m)});\n  tables.forEach(apply);\n}\ndocument.querySelectorAll(\'#modebar button\').forEach(function(b){b.addEventListener(\'click\',function(){setMode(b.getAttribute(\'data-m\'))})});\nsetMode(mode);\n})();\n</script>\n'
 
 
@@ -1257,66 +1260,68 @@ def _pay_summary(payments: list) -> list:
         r["it_wh"] = round(sum(float(p["it_wh"] or 0) for p in items), 2)
         out.append(r)
     if ledger:
-        # delivered per tracking, but TCS has not paid their COD: no black or blue entry in any weekly report yet.
-        # The moment a parcel shows up as black or blue in a weekly report it leaves this list by itself.
+        # The three lower rows are built from the weekly lists. List numbers come from the Weekly report rows above
+        # (list 1 = the oldest report, list 2 = the next, ... a new report adds a new list by itself); list 0 = the
+        # parcel is not in any weekly report yet.
+        week_no = {v["BILLING_WEEK"]: n for n, v in enumerate(sorted(ledger, key=lambda v: _wk(v["BILLING_WEEK"])), 1)}
         paid_cns = {str(r["cn"]) for r in adv if r["kind"] in ("same", "follow") and r["cod"] > 0}
-        red_week = {str(r["cn"]): r["week"] for r in adv if r["kind"] == "advance"}
-        waiting = [p for p in payments if p["state"] == "delivered" and str(p["cn"]) not in paid_cns]
+        red_info = {str(r["cn"]): (r["week"], r["status"]) for r in adv if r["kind"] == "advance"}
+        brown_week = {str(r["cn"]): r["earlier_week"] for r in adv if r["kind"] == "follow" and r["cod"] <= 0}
 
         def okey(p):
             mo = re.search(r"(\d+)$", p["order"])
             return (re.sub(r"\d+$", "", p["order"]), int(mo.group(1)) if mo else 0)
-        waiting.sort(key=okey)
+
+        def list_no(p):
+            cn = str(p["cn"])
+            if cn in red_info:
+                return week_no.get(red_info[cn][0], 0)
+            if cn in brown_week:
+                return week_no.get(brown_week[cn], 0)
+            return 0
+
+        def note_of(p, moving):
+            cn = str(p["cn"])
+            n = list_no(p)
+            if cn in red_info and cn in brown_week:
+                return f"list {n}: red (fee cut), then brown in a later list (no new cut)"
+            if cn in red_info:
+                return f"list {n}: red, fee cut, TCS status {esc(red_info[cn][1])}" + ("; still not delivered" if moving else "")
+            if cn in brown_week:
+                return f"list {n}: brown, fee already cut earlier, no new cut"
+            return "not in any list yet"
+
+        def list_row(title, items, moving, show_note):
+            items = sorted(items, key=lambda p: (list_no(p) or 10 ** 6, okey(p)))
+            counts = Counter(list_no(p) for p in items)
+            btns = ["<button class='lst on' data-l='all'>All (%d)</button>" % len(items)]
+            btns += [f"<button class='lst' data-l='{n}'>List {n} ({counts[n]})</button>" for n in sorted(k for k in counts if k)]
+            if counts.get(0):
+                btns.append(f"<button class='lst' data-l='0'>Not in list yet ({counts[0]})</button>")
+            orders, prods = [], []
+            for n, p in enumerate(items, 1):
+                ln = list_no(p)
+                tail = f" ({esc(str(p['status']))}; {note_of(p, moving)})" if show_note else f" ({note_of(p, moving)})"
+                orders.append(f"<div data-list='{ln}'><span class='no'>{n}</span>. <b>{esc(p['order'])}</b>{tail}</div>")
+                prods.append(f"<div data-list='{ln}'><span class='no'>{n}</span>: {esc(short(p['order']))}</div>")
+            return {"group": f"<b>{esc(title)}</b><div class='lstbar'>" + "".join(btns) + "</div>", "kind": "charges",
+                    "parcels": len(items), "orders": "".join(orders), "products": "".join(prods), "cod": "",
+                    "gst_wh": "", "it_wh": "", "netpay": ""}
+
+        waiting = [p for p in payments if p["state"] == "delivered" and str(p["cn"]) not in paid_cns]
         if waiting:
-            wparts, wprod = [], []
-            for n, p in enumerate(waiting, 1):
-                where = red_week.get(str(p["cn"]))
-                note = (f"in weekly report {esc(where)} as red: fee cut, COD not paid yet" if where
-                        else "not in any weekly report yet")
-                wparts.append(f"<div>{n}. <b>{esc(p['order'])}</b> ({note})</div>")
-                wprod.append(f"<div>{n}: {esc(short(p['order']))}</div>")
-            out.append({"group": "<b>Delivered, not paid yet</b>", "kind": "awaiting", "parcels": len(waiting),
-                        "orders": "".join(wparts), "products": "".join(wprod), "cod": "", "gst_wh": "", "it_wh": "",
-                        "netpay": ""})
+            out.append(list_row("Delivered, not paid yet", waiting, False, False))
+        back = [p for p in payments if p["state"] in ("returned", "returning", "rejected")]
+        if back:
+            out.append(list_row("Returned / refused", back, False, True))
+        moving = [p for p in payments if p["state"] not in ("delivered", "returned", "returning", "rejected")]
+        if moving:
+            out.append(list_row("In transit", moving, True, True))
     else:
         waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
         if waiting:
             out.append(base("Delivered, not paid yet", "awaiting", waiting,
                             "TCS shows these as delivered with no payment date yet."))
-    if ledger:
-        brown_week = {str(r["cn"]): r["earlier_week"] for r in adv if r["kind"] == "follow" and r["cod"] <= 0}
-        red_info = {str(r["cn"]): (r["week"], r["status"]) for r in adv if r["kind"] == "advance"}
-
-        def where_note(p, moving):
-            cn = str(p["cn"])
-            if cn in red_info and cn in brown_week:
-                return (f"red in {esc(red_info[cn][0])} (fee cut), then brown in a later report (no new cut)")
-            if cn in red_info:
-                wk, st = red_info[cn]
-                return (f"in weekly report {esc(wk)} as red: fee cut, TCS status {esc(st)}"
-                        + ("; still not delivered" if moving else ""))
-            if cn in brown_week:
-                return f"in a weekly report as brown: fee already cut in {esc(brown_week[cn])}, no new cut"
-            return "not in any weekly report yet"
-
-        def numbered(title, items, moving):
-            items = sorted(items, key=okey)
-            btn = (lambda p: " " + ("" if moving else
-                   f"<button class='inl' data-t='gl' data-cn='{esc(str(p['cn']))}' title='Return details'>&#128083;</button>")
-                   + f"<button class='inl' data-t='eye' data-cn='{esc(str(p['cn']))}' title='Tracking history'>&#128065;</button>")
-            rows = "".join(f"<div>{n}. <b>{esc(p['order'])}</b>{btn(p)} ({esc(str(p['status']))}; {where_note(p, moving)})</div>"
-                           for n, p in enumerate(items, 1))
-            prods = "".join(f"<div>{n}: {esc(short(p['order']))}</div>" for n, p in enumerate(items, 1))
-            return {"group": f"<b>{esc(title)}</b>", "kind": "charges", "parcels": len(items), "orders": rows,
-                    "products": prods, "cod": "", "gst_wh": "", "it_wh": "", "netpay": ""}
-
-        back = [p for p in payments if p["state"] in ("returned", "returning", "rejected")]
-        if back:
-            out.append(numbered("Returned / refused", back, False))
-        moving = [p for p in payments if p["state"] not in ("delivered", "returned", "returning", "rejected")]
-        if moving:
-            out.append(numbered("In transit", moving, True))
-    else:
         back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
         if back:
             out.append(base("Returned / refused", "charges", back, "No COD. TCS has not paid anything for these."))
@@ -1721,7 +1726,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div></div>"
-        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS
+        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS + REPORT_LST_JS
     )
 
 
