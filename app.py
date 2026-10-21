@@ -1221,8 +1221,9 @@ def _pay_summary(payments: list) -> list:
         dsum, asum = round(sum(blue_n) + sum(black_n), 2), round(sum(an), 2)
         deliv = " + ".join([f"<span style='{BLUE}'>{f2(x)}</span>" for x in blue_n] + [f2(x) for x in black_n]) or "0.00"
         netpay = (f"<div>Delivered: {deliv} = <b>{f2(dsum)}</b></div>"
-                  f"<div style='{RED}'>Advance cut = {' + '.join(f2(x) for x in an) or '0.00'} = <b>{f2(asum)}</b></div>"
-                  + (f"<div style='{BROWN}'>Returned, no new cut = {' + '.join('0.00' for _ in zero)} = <b>0.00</b></div>" if zero else "")
+                  f"<div style='{RED}'>Advance cut = "
+                  + " + ".join([f2(x) for x in an] + [f"<span style='{BROWN}'>0</span>" for _ in zero] or ["0.00"])
+                  + f" = <b>{f2(asum)}</b></div>"
                   + f"<div>Amount to be paid: {f2(dsum)} - {f2(asum)} = <b>{f2(round(dsum - asum, 2))}</b></div>"
                   f"<div><small>TCS invoice payable: {esc(str(v.get('AMOUNTPAYABLE', '')))}</small></div>")
         # the confirmation is written only when the ledger really carries a payment date
