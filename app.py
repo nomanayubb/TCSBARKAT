@@ -1270,12 +1270,41 @@ def _pay_summary(payments: list) -> list:
         if waiting:
             out.append(base("Delivered, not paid yet", "awaiting", waiting,
                             "TCS shows these as delivered with no payment date yet."))
-    back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
-    if back:
-        out.append(base("Returned / refused", "charges", back, "No COD. TCS has not paid anything for these."))
-    moving = [p for p in payments if p["pay_status"] != "Paid" and p["state"] not in ("delivered", "returned", "returning", "rejected")]
-    if moving:
-        out.append(base("In transit", "charges", moving, "Not delivered yet."))
+    if ledger:
+        brown_week = {str(r["cn"]): r["earlier_week"] for r in adv if r["kind"] == "follow" and r["cod"] <= 0}
+        red_info = {str(r["cn"]): (r["week"], r["status"]) for r in adv if r["kind"] == "advance"}
+
+        def where_note(p, moving):
+            cn = str(p["cn"])
+            if cn in red_info:
+                wk, st = red_info[cn]
+                return (f"in weekly report {esc(wk)} as red: fee cut, TCS status {esc(st)}"
+                        + ("; still not delivered" if moving else ""))
+            if cn in brown_week:
+                return f"in a weekly report as brown: fee already cut in {esc(brown_week[cn])}, no new cut"
+            return "not in any weekly report yet"
+
+        def numbered(title, items, moving):
+            items = sorted(items, key=okey)
+            rows = "".join(f"<div>{n}. <b>{esc(p['order'])}</b> ({esc(str(p['status']))}; {where_note(p, moving)})</div>"
+                           for n, p in enumerate(items, 1))
+            prods = "".join(f"<div>{n}: {esc(short(p['order']))}</div>" for n, p in enumerate(items, 1))
+            return {"group": f"<b>{esc(title)}</b>", "kind": "charges", "parcels": len(items), "orders": rows,
+                    "products": prods, "cod": "", "gst_wh": "", "it_wh": "", "netpay": ""}
+
+        back = [p for p in payments if p["state"] in ("returned", "returning", "rejected")]
+        if back:
+            out.append(numbered("Returned / refused", back, False))
+        moving = [p for p in payments if p["state"] not in ("delivered", "returned", "returning", "rejected")]
+        if moving:
+            out.append(numbered("In transit", moving, True))
+    else:
+        back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
+        if back:
+            out.append(base("Returned / refused", "charges", back, "No COD. TCS has not paid anything for these."))
+        moving = [p for p in payments if p["pay_status"] != "Paid" and p["state"] not in ("delivered", "returned", "returning", "rejected")]
+        if moving:
+            out.append(base("In transit", "charges", moving, "Not delivered yet."))
     return out
 
 
