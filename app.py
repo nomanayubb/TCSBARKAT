@@ -1188,6 +1188,9 @@ def _pay_summary(payments: list) -> list:
         advance = [r for r in rows if r["kind"] == "advance"]
         zero = [r for r in rows if r["kind"] == "follow" and r["cod"] <= 0]
         parts, pparts = [], []
+        for r in follow:  # delivered now, fee cut in an earlier week
+            pparts.append(f"<div style='{BLUE}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
+            parts.append(f"<div style='{BLUE}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
         for r in same:  # delivered in the week: fee and withholding cut together
             fee = (f"150 - fuel {m(r['fuel'])} - sales tax {m(r['stax'])}" if r["stax"] != "" else
                    f"{r['shipping']:g} - {m(r['fee'] - r['shipping'])} (fuel + sales tax)")
@@ -1196,9 +1199,6 @@ def _pay_summary(payments: list) -> list:
         for r in advance:  # fee cut in advance: not delivered yet
             pparts.append(f"<div style='{RED}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
             parts.append(f"<div style='{RED}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> -{m(r['fee'])} (fee cut; TCS status: {esc(r['status'])})</div>")
-        for r in follow:  # delivered now, fee cut in an earlier week
-            pparts.append(f"<div style='{BLUE}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
-            parts.append(f"<div style='{BLUE}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
         for r in zero:  # returned / refused after its fee was cut earlier: nothing new is cut
             pparts.append(f"<div style='{BROWN}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
             parts.append(f"<div style='{BROWN}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (fee {m(r['earlier_fee'])} already cut in week {esc(r['earlier_week'])}; "
