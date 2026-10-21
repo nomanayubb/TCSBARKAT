@@ -1311,12 +1311,20 @@ def _pay_summary(payments: list) -> list:
         waiting = [p for p in payments if p["state"] == "delivered" and str(p["cn"]) not in paid_cns]
         if waiting:
             out.append(list_row("Delivered, not paid yet", waiting, False, False))
-        back = [p for p in payments if p["state"] in ("returned", "returning", "rejected")]
-        if back:
-            out.append(list_row("Returned / refused", back, False, True))
+        # every parcel sits in exactly one row, decided from its live TCS state on each refresh, so it moves by itself:
+        # in transit -> delivered (not paid) -> weekly report once paid; refused -> return to origin -> return to shipper
         moving = [p for p in payments if p["state"] not in ("delivered", "returned", "returning", "rejected")]
         if moving:
             out.append(list_row("In transit", moving, True, True))
+        refused = [p for p in payments if p["state"] == "rejected"]
+        if refused:
+            out.append(list_row("Refused by receiver (not returning yet)", refused, False, True))
+        to_origin = [p for p in payments if p["state"] == "returning"]
+        if to_origin:
+            out.append(list_row("Return to origin (on the way back)", to_origin, False, True))
+        to_shipper = [p for p in payments if p["state"] == "returned"]
+        if to_shipper:
+            out.append(list_row("Return to shipper (back with you)", to_shipper, False, True))
     else:
         waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
         if waiting:
