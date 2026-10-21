@@ -35,6 +35,8 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
+
+import urdu_fix
 from flask import Flask, request, abort, jsonify, Response
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
@@ -510,6 +512,46 @@ def book_tcs_shipment(order: dict, env=None) -> dict:
 
 
 # ---------------------------------------------------------------- core processing
+URDU_AUTOFIX = os.environ.get("URDU_AUTOFIX", "true").strip().lower() != "false"
+_ADDR_FIELDS = ("first_name", "last_name", "company", "address1", "address2", "city", "province")
+
+
+def maybe_fix_urdu(order: dict) -> None:
+    """Customers sometimes type their name/address in Urdu, which TCS cannot read.
+    Rewrite those fields in English letters on the Shopify order (original kept in the
+    order note) and in the order dict used for booking. Never raises."""
+    if not URDU_AUTOFIX:
+        return
+    try:
+        tags = [t.strip() for t in str(order.get("tags") or "").split(",") if t.strip()]
+        if "urdu-converted" in tags:
+            return
+        payload, originals = {}, []
+        for key in ("shipping_address", "billing_address"):
+            addr = order.get(key) or {}
+            changed = {f: urdu_fix.to_english(addr[f]) for f in _ADDR_FIELDS if urdu_fix.has_urdu(addr.get(f))}
+            if changed:
+                originals += [f"{f}: {addr[f]}" for f in changed]
+                payload[key] = changed
+        if not payload:
+            return
+        note = (str(order.get("note") or "") + chr(10) + "Original Urdu text: " + " | ".join(originals)).strip()
+        body = {"order": dict(payload, id=order["id"], note=note, tags=", ".join(tags + ["urdu-converted"]))}
+        r = requests.put(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
+                         json=body, timeout=(10, 30))
+        if r.status_code >= 400:
+            status["urdu_fix_error"] = f"{order.get('name')}: Shopify said {r.status_code} (needs write_orders permission?)"
+            log.warning("Urdu fix not saved for %s: HTTP %s", order.get("name"), r.status_code)
+            return
+        for key, changed in payload.items():
+            (order.get(key) or {}).update(changed)
+        status["urdu_orders_fixed"] = status.get("urdu_orders_fixed", 0) + 1
+        log.info("Converted Urdu name/address to English on order %s", order.get("name"))
+    except Exception as e:
+        status["urdu_fix_error"] = f"{order.get('name')}: {type(e).__name__}"
+        log.exception("Urdu fix failed for %s", order.get("name"))
+
+
 def process_order(order: dict) -> None:
     order_id = order["id"]
     if already_processed(order_id):
@@ -518,6 +560,7 @@ def process_order(order: dict) -> None:
     if order.get("fulfillment_status") == "fulfilled":
         mark_processed(order_id)
         return
+    maybe_fix_urdu(order)
 
     log.info("Processing new order %s (%s)", order_id, order.get("name"))
     shipping = order.get("shipping_address") or {}
