@@ -1276,6 +1276,8 @@ def _pay_summary(payments: list) -> list:
 
         def where_note(p, moving):
             cn = str(p["cn"])
+            if cn in red_info and cn in brown_week:
+                return (f"red in {esc(red_info[cn][0])} (fee cut), then brown in a later report (no new cut)")
             if cn in red_info:
                 wk, st = red_info[cn]
                 return (f"in weekly report {esc(wk)} as red: fee cut, TCS status {esc(st)}"
