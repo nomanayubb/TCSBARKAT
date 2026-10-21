@@ -1243,10 +1243,33 @@ def _pay_summary(payments: list) -> list:
         r["gst_wh"] = round(sum(float(p["gst_wh"] or 0) for p in items), 2)
         r["it_wh"] = round(sum(float(p["it_wh"] or 0) for p in items), 2)
         out.append(r)
-    waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
-    if waiting:
-        out.append(base("Delivered, not paid yet", "awaiting", waiting,
-                        "TCS shows these as delivered with no payment date yet."))
+    if ledger:
+        # delivered per tracking, but TCS has not paid their COD: no black or blue entry in any weekly report yet.
+        # The moment a parcel shows up as black or blue in a weekly report it leaves this list by itself.
+        paid_cns = {str(r["cn"]) for r in adv if r["kind"] in ("same", "follow") and r["cod"] > 0}
+        red_week = {str(r["cn"]): r["week"] for r in adv if r["kind"] == "advance"}
+        waiting = [p for p in payments if p["state"] == "delivered" and str(p["cn"]) not in paid_cns]
+
+        def okey(p):
+            mo = re.search(r"(\d+)$", p["order"])
+            return (re.sub(r"\d+$", "", p["order"]), int(mo.group(1)) if mo else 0)
+        waiting.sort(key=okey)
+        if waiting:
+            wparts, wprod = [], []
+            for n, p in enumerate(waiting, 1):
+                where = red_week.get(str(p["cn"]))
+                note = (f"in weekly report {esc(where)} as red: fee cut, COD not paid yet" if where
+                        else "not in any weekly report yet")
+                wparts.append(f"<div>{n}. <b>{esc(p['order'])}</b> ({note})</div>")
+                wprod.append(f"<div>{n}: {esc(short(p['order']))}</div>")
+            out.append({"group": "<b>Delivered, not paid yet</b>", "kind": "awaiting", "parcels": len(waiting),
+                        "orders": "".join(wparts), "products": "".join(wprod), "cod": "", "gst_wh": "", "it_wh": "",
+                        "netpay": ""})
+    else:
+        waiting = [p for p in payments if p["pay_status"] != "Paid" and p["state"] == "delivered"]
+        if waiting:
+            out.append(base("Delivered, not paid yet", "awaiting", waiting,
+                            "TCS shows these as delivered with no payment date yet."))
     back = [p for p in payments if p["pay_status"] != "Paid" and p["state"] in ("returned", "returning", "rejected")]
     if back:
         out.append(base("Returned / refused", "charges", back, "No COD. TCS has not paid anything for these."))
