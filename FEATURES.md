@@ -69,3 +69,11 @@ Status: **done** = live on the report, **next** = designed, not built yet. Every
 53. next - Settings page (refresh speed, alert words, columns shown) stored on the server.
 54. next - Multi-store support (more than one Shopify store and TCS account).
 55. next - Order-book bridge: book parcels from the report with the TCS booking API (needs your approval per use).
+
+## Added in batch 3 (separate file `extras.py`, own pages, nothing earlier was changed)
+- Bell icon (top right of the report and of the tools page): every change in the tables, with time ago and exact date and time, unread badge, sound option, Clear all.
+- Change log covers: status changes (in transit -> refused -> return to origin -> return to shipper, delivered), new steps, COD and payment changes, any change in a weekly report line, new weekly reports and payment dates, orders waiting for booking.
+- `/tools` page with 57 analysis tools in five groups (Parcels, Money, Webhook, Returns, Tools): search, auto refresh, CSV for each.
+- "More tables" at the bottom of the report: hidden until you add one from the list; each loads only when added.
+- Printable weekly statement, JSON backup, daily digest and message text, settings and freshness checks.
+- Safety: at most 4 TCS tracking calls at once, 60 second pause after an error answer from TCS, a failed answer never wipes known data, 5 minute pause after a failed Envio sign-in (protects the account from locking).

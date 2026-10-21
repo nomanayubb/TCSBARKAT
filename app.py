@@ -26,6 +26,7 @@ import json
 import logging
 import os
 import re
+import sys
 import threading
 import time
 import urllib.parse
@@ -758,13 +759,19 @@ def _load_cns(extra: str = "") -> list:
 
 
 _track_cache = {}
+_TCS_SEM = threading.BoundedSemaphore(4)      # never more than 4 tracking calls at the same moment
+_tcs_backoff = {"until": 0.0}                 # after an error answer from TCS: stop calling for a minute
 
 
 def _track_one(cn: str):
     hit = _track_cache.get(cn)
-    if hit and time.time() - hit[0] < (86400 if (hit[1] or {}).get("state") in ("delivered", "returned") else 15):
+    final = hit and (hit[1] or {}).get("state") in ("delivered", "returned")
+    # finished parcels never change; moving ones keep their current 15 s refresh (a webhook event forgets the entry at once)
+    if hit and (time.time() - hit[0] < (86400 if final else 15) or time.time() < _tcs_backoff["until"]):
         return hit[1]
     row = _track_one_uncached(cn)
+    if row is None and hit:
+        return hit[1]  # a failed or empty answer must not wipe what we knew
     _track_cache[cn] = (time.time(), row)
     return row
 
@@ -794,11 +801,17 @@ _order_items = {}   # order name -> [(product title, quantity)]
 
 
 def _track_one_uncached(cn: str):
+    if time.time() < _tcs_backoff["until"]:
+        return None
     try:
-        r = requests.get(
-            f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
-            headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
-            params={"consignee": cn}, timeout=(10, 30))
+        with _TCS_SEM:
+            r = requests.get(
+                f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
+                headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
+                params={"consignee": cn}, timeout=(10, 30))
+        if r.status_code in (401, 403, 429, 500, 502, 503, 504):
+            _tcs_backoff["until"] = time.time() + 60
+            raise RuntimeError(f"TCS tracking answered {r.status_code}: pausing calls for 60 seconds")
         d = r.json() or {}
         info = (d.get("shipmentinfo") or [None])[0]
         if not info:
@@ -1741,7 +1754,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div></div>"
-        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS + REPORT_LST_JS + REPORT_LIVEBOX_JS
+        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS + REPORT_LST_JS + REPORT_LIVEBOX_JS + extras.NOTIFY_JS + extras.LINK_HTML
     )
 
 
@@ -1911,6 +1924,16 @@ _ENVIO_COLS = ["id", "ConsignmentNumber", "CustomerReference", "BookingDate", "C
 
 def _envio_login():
     """Signs in to the Envio portal the way the login page does (anti-forgery token + username + password)."""
+    if time.time() < _envio.get("fail_until", 0):
+        raise RuntimeError("Envio sign-in is paused for a few minutes after a failed attempt")
+    try:
+        return _envio_login_now()
+    except Exception:
+        _envio["fail_until"] = time.time() + 300  # repeated wrong sign-ins could lock the account
+        raise
+
+
+def _envio_login_now():
     if not (ENVIO_USERNAME and ENVIO_PASSWORD):
         raise RuntimeError("ENVIO_USERNAME / ENVIO_PASSWORD (or TCS_USERNAME / TCS_PASSWORD) are not set")
     sess = requests.Session()
@@ -2750,6 +2773,10 @@ def _start_background_work_once():
                 _started["done"] = True
                 start_catch_up_thread()
                 threading.Thread(target=watchdog, daemon=True).start()
+
+
+import extras  # extra tools page, change bell: kept in their own file
+extras.register(app, sys.modules[__name__])
 
 
 if __name__ == "__main__":
