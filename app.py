@@ -1410,8 +1410,8 @@ def _weekly_html(rep: dict, esc) -> str:
 
 def _paysum_html(rep: dict, esc) -> str:
     rows = rep.get("pay_summary", [])
-    heads = ("Payment", "Orders", "Products", "COD", "GST WH 2%", "IT WH 2%", "Net payable")
-    keys = ("group", "orders", "products", "cod", "gst_wh", "it_wh", "netpay")
+    heads = ("Payment", "Orders", "Products", "Net payable")
+    keys = ("group", "orders", "products", "netpay")
     body = "".join(
         "<tr" + (" class='tot'" if r["kind"] == "total" else "") + f"><td>{i}</td>"
         + "".join(f"<td>{r.get(k, '') if k in ('group', 'orders', 'products', 'netpay') else esc(str(r.get(k, '')))}</td>" for k in keys) + "</tr>"
