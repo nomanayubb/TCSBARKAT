@@ -1053,10 +1053,10 @@ def _build_report_core(d_from: date, d_to: date, extra: str = "") -> dict:
     if payments:  # delivered parcels TCS has not put in its payment list yet: charges are the usual ones (estimate)
         std = {k: Counter(p[k] for p in payments).most_common(1)[0][0] for k in ("shipping", "fuel", "stax")}
         for p in parcels:
-            if p["state"] == "delivered" and str(p["cn"]) not in by_cn:
+            if str(p["cn"]) not in by_cn:  # booked and tracked, but not in TCS's payment ledger yet (any state)
                 payments.append({
                     "cn": p["cn"], "order": p["order"] or "", "booked": p["booked"], "consignee": p.get("consignee") or "",
-                    "city": p["city"], "weight": p.get("weight") or 0.5, "status": p["status"], "state": "delivered",
+                    "city": p["city"], "weight": p.get("weight") or 0.5, "status": p["status"], "state": p["state"],
                     "pay_status": "Not listed yet", "pay_date": "", "cod": 0.0, "shipping": std["shipping"],
                     "fuel": std["fuel"], "osa": 0.0, "stax": std["stax"], "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0,
                     "net": round(-(std["shipping"] + std["fuel"] + std["stax"]), 2)})
