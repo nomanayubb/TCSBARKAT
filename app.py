@@ -1179,13 +1179,14 @@ def _pay_summary(payments: list) -> list:
             return "product"
         return " + ".join(" ".join(t.split()[:3]) + (f" x {q}" if q > 1 else "") for t, q in items)
 
-    RED, BLUE = "color:#b3261e", "color:#1a56db"
+    RED, BLUE, BROWN = "color:#b3261e", "color:#1a56db", "color:#8b4513"
     for v in sorted(ledger, key=lambda v: _wk(v["BILLING_WEEK"])):
         w = v["BILLING_WEEK"]
         rows = [r for r in adv if r["week"] == w]
         same = [r for r in rows if r["kind"] == "same"]
         follow = [r for r in rows if r["kind"] == "follow" and r["cod"] > 0]
         advance = [r for r in rows if r["kind"] == "advance"]
+        zero = [r for r in rows if r["kind"] == "follow" and r["cod"] <= 0]
         parts, pparts = [], []
         for r in same:  # delivered in the week: fee and withholding cut together
             fee = (f"150 - fuel {m(r['fuel'])} - sales tax {m(r['stax'])}" if r["stax"] != "" else
@@ -1198,6 +1199,10 @@ def _pay_summary(payments: list) -> list:
         for r in follow:  # delivered now, fee cut in an earlier week
             pparts.append(f"<div style='{BLUE}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
             parts.append(f"<div style='{BLUE}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (COD {m(r['cod'])} - IT {m(r['itw'])} - GST {m(r['gst'])} = <b>{m(r['net'])}</b>) - fee already cut earlier</div>")
+        for r in zero:  # returned / refused after its fee was cut earlier: nothing new is cut
+            pparts.append(f"<div style='{BROWN}'>{len(parts) + 1}: {esc(short(r['order']))}</div>")
+            parts.append(f"<div style='{BROWN}'>{len(parts) + 1}. <b>{esc(r['order'])}</b> (fee {m(r['earlier_fee'])} already cut in week {esc(r['earlier_week'])}; "
+                         f"status {esc(r['status'])}: no COD, no new cut = 0.00)</div>")
         try:
             pday = datetime.strptime(v["PAYMENTDATE"], "%d-%b-%Y").strftime("%d/%m/%Y")
         except ValueError:
@@ -1340,7 +1345,8 @@ def _advance_rows(lines: list, payments: list) -> list:
                         + (f"This week only GST WH {gst:,.2f} + IT WH {itw:,.2f} are cut from the COD {cod:,.2f}; net {net:,.2f}."
                            if cod > 0 else "This week's line adds no new cut."))
                 out.append({**base, "kind": "follow", "event": "Follow-up: fee already cut earlier", "shipping": 0.0,
-                            "fuel": 0.0, "stax": 0.0, "fee": 0.0, "note": note})
+                            "fuel": 0.0, "stax": 0.0, "fee": 0.0, "note": note,
+                            "earlier_week": fee_line["_week"], "earlier_fee": fee_total})
     out.sort(key=lambda r: (_wk(r["week"]), r["order"]), reverse=True)
     return out
 
