@@ -34,7 +34,7 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
 import requests
-from flask import Flask, request, abort, jsonify
+from flask import Flask, request, abort, jsonify, Response
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("tcs-fulfillment")
@@ -1107,7 +1107,10 @@ REPORT_RATE_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.s
 REPORT_ADV_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar tb=document.getElementById(\'advtbl\'); if(!tb) return;\nvar last=\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction label(th){return th.textContent.replace(/[▲▼]/g,\'\').trim()}\nfunction num(v){return v===\'\'||v==null?\'\':Number(v).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}\nvar MAP={\'Order\':\'order\',\'CN\':\'cn\',\'What happened\':\'event\',\'Status\':\'status\',\'Shipping\':\'shipping\',\'Fuel\':\'fuel\',\'Sales tax\':\'stax\',\'Fee total\':\'fee\',\'COD\':\'cod\',\'GST WH 2%\':\'gst\',\'IT WH 2%\':\'itw\',\'Net\':\'net\',\'Note\':\'note\'};\nvar NUMS={\'Shipping\':1,\'Fuel\':1,\'Sales tax\':1,\'Fee total\':1,\'COD\':1,\'GST WH 2%\':1,\'IT WH 2%\':1,\'Net\':1};\nfunction render(d){\n  var names=Array.prototype.map.call(tb.rows[0].cells,label), body=tb.tBodies[0]||tb;\n  while(tb.rows.length>1) tb.deleteRow(1);\n  var counts={}; d.advance.forEach(function(r){counts[r.week]=(counts[r.week]||0)+1});\n  var cur=null,n=0,k=1;\n  d.advance.forEach(function(r){\n    if(r.week!==cur){cur=r.week;n=0;var g=document.createElement(\'tr\');g.className=\'grp\';g.setAttribute(\'data-day\',cur);\n      g.innerHTML="<td colspan=\'"+names.length+"\' style=\'background:#eef;font-weight:bold\'>"+esc(cur)+" - "+counts[cur]+" entries</td>";g._ord=k++;body.appendChild(g)}\n    n++;var tr=document.createElement(\'tr\');tr.setAttribute(\'data-day\',cur);\n    if(r.kind===\'follow\') tr.style.background=\'rgba(18,128,60,.08)\'; else tr.style.background=\'rgba(178,106,0,.08)\';\n    tr.innerHTML=names.map(function(nm){return \'<td>\'+(nm===\'#\'?n:(NUMS[nm]?num(r[MAP[nm]]):esc(r[MAP[nm]])))+\'</td>\'}).join(\'\');\n    tr._ord=k++;body.appendChild(tr)});\n  if(window.__reportApply) window.__reportApply(tb);\n}\nfunction poll(){\n  var sec=tb.closest(\'.sec\'); if(document.hidden||(sec&&sec.style.display===\'none\')) return;\n  fetch(\'/ledger.json?key=\'+encodeURIComponent(KEY),{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n    if(!d.advance) return; var sig=JSON.stringify(d.advance); if(sig!==last){last=sig;render(d)}\n  }).catch(function(){});\n}\npoll(); setInterval(poll,30000);\n})();\n</script>\n'
 
 
-REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f3f3f3;border-radius:6px}\n#tablebar label{margin-right:14px;white-space:nowrap;cursor:pointer}\n.pager{margin:4px 0 6px;font-size:14px}\n.pager button{padding:2px 10px;margin:0 3px;cursor:pointer}\n.pager select{padding:2px 4px}\n@media (prefers-color-scheme:dark){#tablebar{background:#222}}\n</style>\n<script>\n(function(){\nvar secs=Array.prototype.slice.call(document.querySelectorAll(\'.sec\'));\nvar TITLES={\'sec-date\':\'Per date\',\'sec-status\':\'Status summary\',\'sec-returns\':\'Return analysis\',\'sec-week\':\'Per week\',\'sec-paysum\':\'TCS payout\',\'sec-adv\':\'Advance cuts\',\'sec-rate\':\'Fee rate\',\'sec-stmt\':\'Statement\',\'sec-payments\':\'Payments\',\'sec-parcels\':\'All parcels\',\'sec-nonshopify\':\'Non-Shopify\',\'sec-unbooked\':\'Not booked\'};\nvar saved={}; try{saved=JSON.parse(localStorage.getItem(\'rtables\')||\'{}\')}catch(e){}\nvar bar=document.createElement(\'div\'); bar.id=\'tablebar\';\nbar.innerHTML=\'<b>Tables shown:</b> \';\nsecs.forEach(function(sec){\n  var on=saved[sec.id]!==false;\n  var lb=document.createElement(\'label\'); var cb=document.createElement(\'input\'); cb.type=\'checkbox\'; cb.checked=on;\n  lb.appendChild(cb); lb.appendChild(document.createTextNode(\' \'+(TITLES[sec.id]||sec.id)));\n  bar.appendChild(lb); sec.style.display=on?\'\':\'none\';\n  cb.addEventListener(\'change\',function(){\n    sec.style.display=cb.checked?\'\':\'none\'; saved[sec.id]=cb.checked;\n    try{localStorage.setItem(\'rtables\',JSON.stringify(saved))}catch(e){}\n  });\n});\nvar mb=document.getElementById(\'modebar\'); if(mb) mb.parentNode.insertBefore(bar,mb); else document.body.insertBefore(bar,document.body.firstChild);\n\nvar SIZES=[10,25,50,100,300,500,0];\nvar size=300; try{size=parseInt(localStorage.getItem(\'rsize2\')||\'300\',10)}catch(e){}\nfunction isData(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')}\nfunction paginate(tb){\n  if(!tb._pager) return;\n  var rows=Array.prototype.slice.call(tb.rows,1);\n  var total=rows.filter(isData).length;\n  var sz=tb._size, pages=sz?Math.max(1,Math.ceil(total/sz)):1;\n  if(tb._page>=pages) tb._page=pages-1; if(tb._page<0) tb._page=0;\n  var start=sz?tb._page*sz:0, end=sz?start+sz:total+1, idx=0, lastVisible=true;\n  var grpRow=null, grpHasVisible=false;\n  function flushGrp(){ if(grpRow) grpRow.style.display=grpHasVisible?\'\':\'none\' }\n  rows.forEach(function(r){\n    if(r.classList.contains(\'grp\')){\n      flushGrp(); grpHasVisible=false;\n      if(r._hid){grpRow=null;return}\n      grpRow=r;\n    } else if(isData(r)){\n      var vis=idx>=start&&idx<end; idx++;\n      r.style.display=vis?\'\':\'none\'; lastVisible=vis; if(vis) grpHasVisible=true;\n    } else if(r.classList.contains(\'det\')){\n      r.style.display=lastVisible?\'\':\'none\';\n    }\n  });\n  flushGrp();\n  var p=tb._pager;\n  p.querySelector(\'.pinfo\').textContent=total?(\'Showing \'+(Math.min(start+1,total))+\' to \'+Math.min(end,total)+\' of \'+total+\' entries - page \'+(tb._page+1)+\' of \'+pages):\'No entries\';\n  p.querySelector(\'.pprev\').disabled=tb._page<=0; p.querySelector(\'.pnext\').disabled=tb._page>=pages-1;\n}\nwindow.__paginate=paginate;\ndocument.querySelectorAll(\'.sec .w table\').forEach(function(tb){\n  var wrap=tb.parentElement; if(wrap.parentElement.querySelector(\'.pager\')) return;\n  var p=document.createElement(\'div\'); p.className=\'pager\';\n  p.innerHTML=\'Show <select class="psize">\'+SIZES.map(function(s){return \'<option value="\'+s+\'"\'+(s===size?\' selected\':\'\')+\'>\'+(s||\'All\')+\'</option>\'}).join(\'\')+\'</select> entries \'+\n    \'<button class="pprev">&laquo; Prev</button><button class="pnext">Next &raquo;</button> <span class="pinfo"></span>\';\n  wrap.parentNode.insertBefore(p,wrap);\n  tb._pager=p; tb._size=size; tb._page=0;\n  p.querySelector(\'.psize\').addEventListener(\'change\',function(e){\n    size=parseInt(e.target.value,10); try{localStorage.setItem(\'rsize2\',String(size))}catch(x){}\n    document.querySelectorAll(\'.sec .w table\').forEach(function(t){ if(t._pager){t._size=size;t._page=0;t._pager.querySelector(\'.psize\').value=String(size);paginate(t)} });\n  });\n  p.querySelector(\'.pprev\').addEventListener(\'click\',function(){tb._page--;paginate(tb)});\n  p.querySelector(\'.pnext\').addEventListener(\'click\',function(){tb._page++;paginate(tb)});\n  paginate(tb);\n});\n})();\n</script>\n'
+REPORT_LIVEBOX_JS = '<style>\n#livebox .cards{display:flex;flex-wrap:wrap;gap:8px;margin:8px 0}\n#livebox .cd{border:1px solid #ccc;border-radius:8px;padding:6px 12px;min-width:120px}\n#livebox .cd b{display:block;font-size:20px}\n#livebox button{padding:3px 10px;margin-right:6px;cursor:pointer}\n#livebox .toast{position:fixed;right:14px;bottom:14px;max-width:320px;background:#222;color:#fff;padding:10px 14px;border-radius:8px;z-index:50;font-size:13px;box-shadow:0 2px 10px rgba(0,0,0,.4)}\n#livebox .ok{color:#12803c}#livebox .bad{color:#b3261e}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nvar box=document.getElementById(\'livebox\'); if(!box) return;\nvar primed=false, since=0, unread=0, baseTitle=document.title, sound=false, evs=[];\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nbox.innerHTML=\n \'<div id="lvhealth">Waiting for events...</div>\'+\n \'<div style="margin:6px 0"><button id="lvnotif">Enable desktop alerts</button><label><input type="checkbox" id="lvsound"> sound</label> \'+\n \'<a href="/export.csv?key=\'+encodeURIComponent(KEY)+\'&table=parcels">Download parcels (CSV)</a></div>\'+\n \'<div class="cards" id="lvcards"></div>\'+\n \'<h4>Live events from TCS (newest first)</h4><div class="w"><table id="evttbl"><tr><th>#</th><th>Received</th><th>CN</th><th>Order</th><th>Status</th><th>Event time</th><th>City</th><th>Received by</th></tr></table></div>\'+\n \'<h4>Needs action</h4><div class="w"><table id="acttbl"><tr><th>#</th><th>Order</th><th>CN</th><th>City</th><th>Last step</th><th>When</th></tr></table></div>\'+\n \'<h4>Destinations</h4><div class="w"><table id="citytbl"><tr><th>#</th><th>City</th><th>Parcels</th><th>Delivered</th><th>In transit</th><th>Returned / refused</th><th>Success %</th></tr></table></div>\';\nfunction fill(id,rows){var tb=document.getElementById(id);while(tb.rows.length>1)tb.deleteRow(1);rows.forEach(function(r,i){var tr=tb.insertRow(-1);tr.innerHTML=\'<td>\'+(i+1)+\'</td>\'+r.map(function(c){return \'<td>\'+c+\'</td>\'}).join(\'\')})}\nfunction toast(t){var d=document.createElement(\'div\');d.className=\'toast\';d.textContent=t;box.appendChild(d);setTimeout(function(){d.remove()},6000)}\nfunction beep(){try{var a=new (window.AudioContext||window.webkitAudioContext)();var o=a.createOscillator();o.frequency.value=880;o.connect(a.destination);o.start();setTimeout(function(){o.stop();a.close()},180)}catch(e){}}\ndocument.getElementById(\'lvsound\').addEventListener(\'change\',function(e){sound=e.target.checked});\ndocument.getElementById(\'lvnotif\').addEventListener(\'click\',function(){if(\'Notification\' in window)Notification.requestPermission()});\ndocument.addEventListener(\'visibilitychange\',function(){if(!document.hidden){unread=0;document.title=baseTitle}});\nfunction pollEvents(){\n  fetch(\'/events.json?key=\'+encodeURIComponent(KEY)+\'&since=\'+since,{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n    var s=d.stats||{}; var h=document.getElementById(\'lvhealth\');\n    h.innerHTML=\'Webhook: <b class="\'+(s.total?\'ok\':\'bad\')+\'">\'+(s.total?\'connected\':\'no event yet\')+\'</b> &middot; events in the last hour: <b>\'+(s.last_hour||0)+\'</b> &middot; last event: \'+esc(s.last_at||\'none\');\n    if(d.events&&d.events.length){\n      var fresh=primed; d.events.forEach(function(e){evs.unshift(e); if(e.id>since)since=e.id});\n      evs=evs.slice(0,100);\n      fill(\'evttbl\',evs.map(function(e){return [esc(e.at),\'<b>\'+esc(e.cn)+\'</b>\',esc(e.order||e.ref||\'\'),esc(e.status),esc(e.when),esc(e.city||\'\'),esc(e.by||\'\')]}));\n      if(fresh){var n=d.events[d.events.length-1]; toast((n.order||n.cn)+\': \'+n.status); if(sound)beep();\n        if(document.hidden){unread+=d.events.length;document.title=\'(\'+unread+\') \'+baseTitle}\n        if(\'Notification\' in window&&Notification.permission===\'granted\'){try{new Notification(\'TCS: \'+(n.order||n.cn),{body:n.status})}catch(e){}}}\n    }\n    primed=true;\n  }).catch(function(){});\n}\nfunction pollInsights(){\n  fetch(\'/insights.json?key=\'+encodeURIComponent(KEY),{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n    if(!d.cards) return;\n    var c=d.cards; document.getElementById(\'lvcards\').innerHTML=\n     \'<div class="cd">Success rate<b>\'+c.success+\'%</b></div><div class="cd">Avg delivery time<b>\'+c.avg_days+\' days</b></div>\'+\n     \'<div class="cd">Delivered<b>\'+c.delivered+\'</b></div><div class="cd">In transit<b>\'+c.transit+\'</b></div>\'+\n     \'<div class="cd">Returned / refused<b>\'+c.returned+\'</b></div><div class="cd">Needs action<b>\'+c.action+\'</b></div>\';\n    fill(\'acttbl\',d.action.map(function(a){return [\'<b>\'+esc(a.order)+\'</b>\',esc(a.cn),esc(a.city),esc(a.step),esc(a.when)]}));\n    fill(\'citytbl\',d.cities.map(function(a){return [\'<b>\'+esc(a.city)+\'</b>\',a.total,a.delivered,a.transit,a.returned,a.success+\'%\']}));\n  }).catch(function(){});\n}\npollEvents(); pollInsights(); setInterval(pollEvents,2000); setInterval(pollInsights,20000);\n})();\n</script>\n'
+
+
+REPORT_CTL_JS = '<style>\n#tablebar{margin:10px 0;padding:8px 12px;background:#f3f3f3;border-radius:6px}\n#tablebar label{margin-right:14px;white-space:nowrap;cursor:pointer}\n.pager{margin:4px 0 6px;font-size:14px}\n.pager button{padding:2px 10px;margin:0 3px;cursor:pointer}\n.pager select{padding:2px 4px}\n@media (prefers-color-scheme:dark){#tablebar{background:#222}}\n</style>\n<script>\n(function(){\nvar secs=Array.prototype.slice.call(document.querySelectorAll(\'.sec\'));\nvar TITLES={\'sec-date\':\'Per date\',\'sec-status\':\'Status summary\',\'sec-returns\':\'Return analysis\',\'sec-week\':\'Per week\',\'sec-paysum\':\'TCS payout\',\'sec-live\':\'Live events\',\'sec-adv\':\'Advance cuts\',\'sec-rate\':\'Fee rate\',\'sec-stmt\':\'Statement\',\'sec-payments\':\'Payments\',\'sec-parcels\':\'All parcels\',\'sec-nonshopify\':\'Non-Shopify\',\'sec-unbooked\':\'Not booked\'};\nvar saved={}; try{saved=JSON.parse(localStorage.getItem(\'rtables\')||\'{}\')}catch(e){}\nvar bar=document.createElement(\'div\'); bar.id=\'tablebar\';\nbar.innerHTML=\'<b>Tables shown:</b> \';\nsecs.forEach(function(sec){\n  var on=saved[sec.id]!==false;\n  var lb=document.createElement(\'label\'); var cb=document.createElement(\'input\'); cb.type=\'checkbox\'; cb.checked=on;\n  lb.appendChild(cb); lb.appendChild(document.createTextNode(\' \'+(TITLES[sec.id]||sec.id)));\n  bar.appendChild(lb); sec.style.display=on?\'\':\'none\';\n  cb.addEventListener(\'change\',function(){\n    sec.style.display=cb.checked?\'\':\'none\'; saved[sec.id]=cb.checked;\n    try{localStorage.setItem(\'rtables\',JSON.stringify(saved))}catch(e){}\n  });\n});\nvar mb=document.getElementById(\'modebar\'); if(mb) mb.parentNode.insertBefore(bar,mb); else document.body.insertBefore(bar,document.body.firstChild);\n\nvar SIZES=[10,25,50,100,300,500,0];\nvar size=300; try{size=parseInt(localStorage.getItem(\'rsize2\')||\'300\',10)}catch(e){}\nfunction isData(r){return !r.classList.contains(\'grp\')&&!r.classList.contains(\'tot\')&&!r.classList.contains(\'det\')}\nfunction paginate(tb){\n  if(!tb._pager) return;\n  var rows=Array.prototype.slice.call(tb.rows,1);\n  var total=rows.filter(isData).length;\n  var sz=tb._size, pages=sz?Math.max(1,Math.ceil(total/sz)):1;\n  if(tb._page>=pages) tb._page=pages-1; if(tb._page<0) tb._page=0;\n  var start=sz?tb._page*sz:0, end=sz?start+sz:total+1, idx=0, lastVisible=true;\n  var grpRow=null, grpHasVisible=false;\n  function flushGrp(){ if(grpRow) grpRow.style.display=grpHasVisible?\'\':\'none\' }\n  rows.forEach(function(r){\n    if(r.classList.contains(\'grp\')){\n      flushGrp(); grpHasVisible=false;\n      if(r._hid){grpRow=null;return}\n      grpRow=r;\n    } else if(isData(r)){\n      var vis=idx>=start&&idx<end; idx++;\n      r.style.display=vis?\'\':\'none\'; lastVisible=vis; if(vis) grpHasVisible=true;\n    } else if(r.classList.contains(\'det\')){\n      r.style.display=lastVisible?\'\':\'none\';\n    }\n  });\n  flushGrp();\n  var p=tb._pager;\n  p.querySelector(\'.pinfo\').textContent=total?(\'Showing \'+(Math.min(start+1,total))+\' to \'+Math.min(end,total)+\' of \'+total+\' entries - page \'+(tb._page+1)+\' of \'+pages):\'No entries\';\n  p.querySelector(\'.pprev\').disabled=tb._page<=0; p.querySelector(\'.pnext\').disabled=tb._page>=pages-1;\n}\nwindow.__paginate=paginate;\ndocument.querySelectorAll(\'.sec .w table\').forEach(function(tb){\n  var wrap=tb.parentElement; if(wrap.parentElement.querySelector(\'.pager\')) return;\n  var p=document.createElement(\'div\'); p.className=\'pager\';\n  p.innerHTML=\'Show <select class="psize">\'+SIZES.map(function(s){return \'<option value="\'+s+\'"\'+(s===size?\' selected\':\'\')+\'>\'+(s||\'All\')+\'</option>\'}).join(\'\')+\'</select> entries \'+\n    \'<button class="pprev">&laquo; Prev</button><button class="pnext">Next &raquo;</button> <span class="pinfo"></span>\';\n  wrap.parentNode.insertBefore(p,wrap);\n  tb._pager=p; tb._size=size; tb._page=0;\n  p.querySelector(\'.psize\').addEventListener(\'change\',function(e){\n    size=parseInt(e.target.value,10); try{localStorage.setItem(\'rsize2\',String(size))}catch(x){}\n    document.querySelectorAll(\'.sec .w table\').forEach(function(t){ if(t._pager){t._size=size;t._page=0;t._pager.querySelector(\'.psize\').value=String(size);paginate(t)} });\n  });\n  p.querySelector(\'.pprev\').addEventListener(\'click\',function(){tb._page--;paginate(tb)});\n  p.querySelector(\'.pnext\').addEventListener(\'click\',function(){tb._page++;paginate(tb)});\n  paginate(tb);\n});\n})();\n</script>\n'
 
 
 REPORT_INL_JS = '<style>\nbutton.inl{margin-left:6px;border:1px solid #888;background:#fff;border-radius:4px;cursor:pointer;padding:0 6px}\nbutton.inl.on{background:#222;color:#fff}\ndiv.inlp{margin:4px 0 8px 18px;padding:6px 10px;border:1px solid #ccc;border-radius:6px;background:#fafafa;font-size:13px}\ndiv.inlp table{margin:4px 0}\n@media (prefers-color-scheme:dark){button.inl{background:#222;color:#eee}div.inlp{background:#1b1b1b;border-color:#444}}\n</style>\n<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nfunction showTrack(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No tracking data from TCS yet\')+\'</i>\';\n  var h=\'<b>\'+esc(d.cn)+\'</b> \'+esc(d.reference||\'\')+\' \'+esc(d.origin||\'\')+\' &rarr; \'+esc(d.destination||\'\');\n  if(d.summary) h+=\'<br><b>\'+esc(d.summary)+\'</b>\';\n  h+=\'<table><tr><th>When</th><th>Step</th><th>Place / person</th></tr>\';\n  (d.steps||[]).forEach(function(x){h+=\'<tr><td>\'+esc(x.datetime)+\'</td><td>\'+esc(x.status)+\'</td><td>\'+esc(x.by)+\'</td></tr>\'});\n  return h+\'</table>\';\n}\nfunction showReturn(d){\n  if(!d||!d.ok) return \'<i>\'+esc((d&&d.error)||\'No data\')+\'</i>\';\n  var h=\'<table>\'; d.fields.forEach(function(f){h+=\'<tr><th>\'+esc(f[0])+\'</th><td>\'+esc(f[1])+\'</td></tr>\'}); return h+\'</table>\';\n}\ndocument.addEventListener(\'click\',function(e){\n  var b=e.target.closest(\'button.inl\'); if(!b) return;\n  var item=b.closest(\'div\'); if(!item) return;\n  var open=item.nextElementSibling;\n  var same=open&&open.classList&&open.classList.contains(\'inlp\')&&open.getAttribute(\'data-t\')===b.getAttribute(\'data-t\');\n  if(open&&open.classList&&open.classList.contains(\'inlp\')){clearInterval(open._iv);open.remove();item.querySelectorAll(\'button.inl.on\').forEach(function(x){x.classList.remove(\'on\')}); if(same) return}\n  var box=document.createElement(\'div\'); box.className=\'inlp\'; box.setAttribute(\'data-t\',b.getAttribute(\'data-t\')); box.textContent=\'Loading...\';\n  item.after(box); b.classList.add(\'on\');\n  var cn=b.getAttribute(\'data-cn\'), t=b.getAttribute(\'data-t\');\n  function load(){\n    var url=t===\'gl\'?\'/return-detail.json?key=\'+encodeURIComponent(KEY)+\'&cn=\'+encodeURIComponent(cn)+\'&sr=\':\'/track.json?key=\'+encodeURIComponent(KEY)+\'&q=\'+encodeURIComponent(cn);\n    fetch(url,{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){\n      box.innerHTML=(t===\'gl\'?showReturn(d):showTrack(d))+\'<small>Updated \'+new Date().toLocaleTimeString()+\' &middot; refreshes every 10 seconds</small>\';\n    }).catch(function(){box.textContent=\'Connection problem, retrying...\'});\n  }\n  load(); box._iv=setInterval(function(){ if(!document.body.contains(box)){clearInterval(box._iv);return} load() },10000);\n});\n})();\n</script>\n'
@@ -1454,6 +1457,10 @@ def _advance_html(rep: dict, esc) -> str:
             + "</tr></table></div></div>")
 
 
+def _livebox_html(rep: dict, esc) -> str:
+    return "<div class='sec' id='sec-live'><h3>Live events and insights</h3><div id='livebox'>Loading...</div></div>"
+
+
 def _weekly_html(rep: dict, esc) -> str:
     """Week by week, built only from TCS data: parcels by outcome, and the COD of parcels delivered in the week
     (paid or still waiting). Delivery-week grouping reproduces your two invoices' COD exactly (4,766 and 11,381).
@@ -1719,7 +1726,7 @@ def _report_html(rep: dict, key: str) -> str:
         f"<tr><th>Booking date</th><th>Total</th>{head}<th>Charges</th></tr>{date_rows}</table></div></div>"
         "<div class='sec' id='sec-status'><h3>Status summary</h3><div class='w'><table>"
         f"<tr><th>Status</th><th>Parcels</th><th>Share</th></tr>{status_rows}</table></div></div>"
-        + _weekly_html(rep, esc) + _rate_html(rep, esc) + _statement_html(rep, esc) + _paysum_html(rep, esc) + _returns_html(rep, esc) +
+        + _livebox_html(rep, esc) + _weekly_html(rep, esc) + _rate_html(rep, esc) + _statement_html(rep, esc) + _paysum_html(rep, esc) + _returns_html(rep, esc) +
         f"<div class='sec' id='sec-parcels'><h3>All booked parcels ({len(rep['parcels'])})</h3><div class='w'><table id='partbl'>"
         "<tr><th>#</th><th>CN</th><th>Booked</th><th>Delivered on</th><th>Status</th><th>Step time</th><th>City</th>"
         "<th>Order</th><th>Product</th><th>Kg</th><th>Payment</th><th>Paid on</th><th>COD amount</th><th>Track</th></tr>"
@@ -1734,7 +1741,7 @@ def _report_html(rep: dict, key: str) -> str:
         + _grouped_rows(rep.get("unbooked", []), "created",
                         ("order", "created", "fulfillment", "product", "total"), esc, 6)
         + "</table></div></div>"
-        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS + REPORT_LST_JS
+        + REPORT_SORT_JS + REPORT_CTL_JS + REPORT_EYE_JS + REPORT_GLASSES_JS + REPORT_LIVE_JS + REPORT_PARCELS_JS + REPORT_PAY_JS + REPORT_SUM_JS + REPORT_LED_JS + REPORT_RATE_JS + REPORT_ADV_JS + REPORT_INL_JS + REPORT_LST_JS + REPORT_LIVEBOX_JS
     )
 
 
@@ -1804,7 +1811,8 @@ def _live_loop():
         except Exception as e:
             log.exception("Live returns refresh failed")
             _live["error"] = f"{type(e).__name__}: {str(e).split('?')[0][:150]}"
-        time.sleep(LIVE_REFRESH_SECONDS)
+        _live_wake.wait(LIVE_REFRESH_SECONDS)
+        _live_wake.clear()
 
 
 def _ensure_live_thread():
@@ -1997,6 +2005,93 @@ def _num(x) -> float:
     except ValueError:
         return 0.0
 
+
+
+_ACTION_WORDS = ("address information needed", "on hold", "not home", "not available", "awaiting consignee",
+                 "delivery attempted", "incorrect address", "refused")
+
+
+def _insights(rep: dict) -> dict:
+    parcels = rep.get("parcels", [])
+    delivered = [p for p in parcels if p.get("state") == "delivered"]
+    back = [p for p in parcels if p.get("state") in ("returned", "returning", "rejected")]
+    moving = [p for p in parcels if p.get("state") not in ("delivered", "returned", "returning", "rejected")]
+    days = []
+    for p in delivered:
+        b, d = _parse_any_date(p.get("booked")), _parse_any_date(p.get("delivered_on") or "")
+        if b and d and d >= b:
+            days.append((d - b).days)
+    action = [p for p in moving if any(w in str(p.get("last_event") or "").lower() for w in _ACTION_WORDS)]
+    cities = {}
+    for p in parcels:
+        c = cities.setdefault(str(p.get("city") or "?"), {"city": str(p.get("city") or "?"), "total": 0, "delivered": 0,
+                                                          "transit": 0, "returned": 0})
+        c["total"] += 1
+        st = p.get("state")
+        c["delivered" if st == "delivered" else "returned" if st in ("returned", "returning", "rejected") else "transit"] += 1
+    for c in cities.values():
+        done = c["delivered"] + c["returned"]
+        c["success"] = round(100 * c["delivered"] / done, 1) if done else 0
+    return {
+        "cards": {"success": round(100 * len(delivered) / max(1, len(delivered) + len(back)), 1),
+                  "avg_days": round(sum(days) / len(days), 1) if days else 0, "delivered": len(delivered),
+                  "transit": len(moving), "returned": len(back), "action": len(action)},
+        "action": [{"order": p.get("order") or "", "cn": p["cn"], "city": p.get("city") or "",
+                    "step": p.get("last_event") or "", "when": p.get("last_time") or ""} for p in action],
+        "cities": sorted(cities.values(), key=lambda c: -c["total"]),
+    }
+
+
+@app.route("/events.json", methods=["GET"])
+def events_json():
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_live_thread()
+    try:
+        since = int(request.args.get("since", "0"))
+    except ValueError:
+        since = 0
+    by_cn = {str(p["cn"]): p.get("order") for p in ((_live["rep"] or {}).get("parcels", []))}
+    new = [dict(e, order=by_cn.get(e["cn"]) or e["ref"]) for e in _webhook_events if e["id"] > since][-100:]
+    hour = sum(1 for e in _webhook_events
+               if (datetime.utcnow() - datetime.strptime(e["at"], "%Y-%m-%d %H:%M:%S UTC")).total_seconds() < 3600)
+    return jsonify({"events": new, "stats": {"total": _webhook_seq[0], "last_hour": hour,
+                                              "last_at": _webhook_events[-1]["at"] if _webhook_events else ""}}), 200
+
+
+@app.route("/insights.json", methods=["GET"])
+def insights_json():
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_live_thread()
+    rep = _live["rep"]
+    if not rep:
+        return jsonify({"loading": True}), 200
+    return jsonify(_insights(rep)), 200
+
+
+@app.route("/export.csv", methods=["GET"])
+def export_csv():
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    _ensure_live_thread()
+    rep = _live["rep"]
+    if not rep:
+        return "Report is still loading, try again in a few seconds.", 503
+    import csv, io
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["CN", "Order", "Booked", "Status", "Current step", "Step time", "City", "Delivered on", "Product"])
+
+    def safe(x):  # spreadsheets run text starting with = + - @ as a formula
+        x = "" if x is None else str(x)
+        return "'" + x if x[:1] in ("=", "+", "-", "@") else x
+    for p in rep.get("parcels", []):
+        w.writerow([safe(p.get("cn")), safe(p.get("order")), safe(p.get("booked")), safe(p.get("status")),
+                    safe(p.get("last_event")), safe(p.get("last_time")), safe(p.get("city")),
+                    safe(p.get("delivered_on")), safe(p.get("product"))])
+    return Response(buf.getvalue(), mimetype="text/csv",
+                    headers={"Content-Disposition": "attachment; filename=tcs-parcels.csv"})
 
 
 @app.route("/rate.json", methods=["GET"])
@@ -2421,11 +2516,49 @@ def products_json():
 
 # ------------------------------------------------ TCS/Envio webhook receiver
 _webhook_cns = {}   # CN -> time received (kept in memory; also re-learned from every new event)
+_webhook_events = []  # parsed status events, newest last: {"id","at","cn","status","when","ref","city","by"}
+_webhook_seq = [0]
+_live_wake = threading.Event()  # set by a webhook event: refresh the report right now
 _webhook_log = []   # last payloads (phone numbers masked), shown on /webhook-log
 
 
 def _mask(text: str) -> str:
     return re.sub(r"(?<!\d)(?:\+?92|0)?3\d{9}(?!\d)", "<phone>", text)
+
+
+def _record_webhook_events(raw: str) -> int:
+    """Turns an Envio message into status events, forgets the cached tracking of those parcels and wakes the live
+    refresh, so every table updates within a few seconds instead of at the next scheduled check."""
+    try:
+        td = (json.loads(raw) or {})
+        td = td.get("trackingdetail") or td
+    except (ValueError, AttributeError):
+        return 0
+    infos = {str(i.get("consignmentno")): i for i in (td.get("shipmentinfo") or []) if isinstance(i, dict)}
+    evs, dels = {}, {}
+    for e in (td.get("eventinfo") or []):
+        if isinstance(e, dict):
+            cn = str(e.get("consignmentno"))
+            if cn not in evs or str(e.get("datetime") or "") >= str(evs[cn].get("datetime") or ""):
+                evs[cn] = e
+    for d in (td.get("deliveryinfo") or []):
+        if isinstance(d, dict):
+            dels[str(d.get("consignmentno"))] = d
+    n = 0
+    for cn in set(infos) | set(evs):
+        i, e, d = infos.get(cn, {}), evs.get(cn, {}), dels.get(cn, {})
+        _webhook_seq[0] += 1
+        _webhook_events.append({"id": _webhook_seq[0], "at": _now(), "cn": cn,
+                                "status": str(e.get("statusdescription") or "").title(), "when": str(e.get("datetime") or "").replace("T", " "),
+                                "ref": str(i.get("referenceno") or ""), "city": str(i.get("city") or ""),
+                                "by": str(d.get("receivedby") or "")})
+        _track_cache.pop(cn, None)
+        _track_json_cache.pop(cn, None)
+        n += 1
+    del _webhook_events[:-500]
+    if n:
+        _live_wake.set()
+    return n
 
 
 @app.route("/webhooks/tcs", methods=["GET", "POST"])
@@ -2441,7 +2574,8 @@ def tcs_webhook():
     _webhook_log.append({"at": _now(), "method": request.method, "cns": sorted(found),
                          "content_type": request.content_type, "body": _mask(raw)[:3000]})
     del _webhook_log[:-30]
-    return {"ok": True, "cns": len(found)}, 200
+    touched = _record_webhook_events(raw)
+    return {"ok": True, "cns": len(found), "events": touched}, 200
 
 
 @app.route("/webhook-log", methods=["GET"])
