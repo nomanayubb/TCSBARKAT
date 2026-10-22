@@ -668,7 +668,9 @@ def cod_by_week():
 import threading
 import time as _time
 
-CH = {"log": [], "seq": 0, "snap": None, "seen": set(), "marks": (None, None)}
+# ids start from the clock (milliseconds) so they keep growing across restarts: a browser that remembers "seen up to id N"
+# from before a restart must not hide the new changes
+CH = {"log": [], "seq": int(_time.time() * 1000), "snap": None, "seen": set(), "marks": (None, None)}
 _ch_lock = threading.Lock()
 
 
@@ -684,10 +686,40 @@ def _snapshot():
     }
 
 
-def _add(kind, text):
+def _add(kind, text, t=None):
     CH["seq"] += 1
-    CH["log"].append({"id": CH["seq"], "t": _time.time(), "kind": kind, "text": text})
+    CH["log"].append({"id": CH["seq"], "t": t or _time.time(), "kind": kind, "text": text})
     del CH["log"][:-500]
+
+
+BACKFILL_HOURS = 72
+
+
+def _tcs_epoch(text):
+    """'Tuesday Oct 13, 2026 16:22' (Pakistan time) -> seconds since 1970, or None."""
+    m = re.search(r"([A-Za-z]{3}) (\d{1,2}), (\d{4})\s+(\d{1,2}):(\d{2})", str(text or ""))
+    if not m:
+        return None
+    try:
+        d = datetime.strptime(" ".join(m.groups()), "%b %d %Y %H %M")
+        return d.replace(tzinfo=timezone(timedelta(hours=5))).timestamp()
+    except ValueError:
+        return None
+
+
+def _backfill(snap):
+    """After a restart the log is empty and the first snapshot has nothing to compare with. So the bell would stay silent
+    about what happened while the service was down. TCS keeps the time of every parcel's last step: list the steps of the
+    last 72 hours with their real TCS time (oldest first, so the newest ends on top)."""
+    now = _time.time()
+    found = []
+    for cn, p in snap["parcels"].items():
+        t = _tcs_epoch(p.get("last_time"))
+        if t and now - BACKFILL_HOURS * 3600 <= t <= now + 3600:
+            found.append((t, p))
+    for t, p in sorted(found, key=lambda x: x[0]):
+        name = p.get("order") or "parcel"
+        _add("status", f"{name}: {_fmt(p.get('status'))} - {_fmt(p.get('last_event'))} (TCS time {_fmt(p.get('last_time'))})", t)
 
 
 def _fmt(v):
@@ -760,6 +792,7 @@ def _watch():
                         _diff(CH["snap"], snap)
                     else:
                         CH["seen"].update(snap["parcels"])
+                        _backfill(snap)
                     CH["snap"], CH["marks"] = snap, marks
         except Exception:
             A.log.exception("Change watcher failed")
