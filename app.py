@@ -695,6 +695,11 @@ def _process_order_locked(order: dict) -> None:
         mark_processed(order_id)
         return
     maybe_fix_urdu(order)
+    if TCS_ENV not in LIVE_TCS_ENVS and TCS_BEARER_TOKEN:
+        # The TCS token is for the live host, this service is set to the test host: a booking login can only fail.
+        # Do not try (no failed logins, no failure counts); the parcels are booked by hand in Envio.
+        status["auto_booking"] = "off: parcels are booked by hand in Envio (TCS_ENV is " + TCS_ENV + ", the test host)"
+        return
 
     log.info("Processing new order %s (%s)", order_id, order.get("name"))
     shipping = order.get("shipping_address") or {}
