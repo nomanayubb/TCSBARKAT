@@ -2001,6 +2001,42 @@ def _report_html(rep: dict, key: str) -> str:
     )
 
 
+_rep_cache = {}  # (from, to, cn) -> {"rep", "at", "lock"}: the last built report, so a page visit does not rebuild it from TCS
+
+
+def _report_cached(d_from: date, d_to: date, extra: str = "") -> dict:
+    """Same report as _build_report. A copy up to 20 s old is served at once; an older one (up to 15 min) is served
+    at once too while a fresh one is built in the background; only with no copy at all does the visitor wait.
+    Visitors arriving together share one build instead of each starting their own."""
+    key = (d_from, d_to, extra)
+    with _tcs_lock:
+        if key not in _rep_cache and len(_rep_cache) >= 12:  # keep memory small: forget the least recently built
+            _rep_cache.pop(min(_rep_cache, key=lambda k: _rep_cache[k]["at"]), None)
+        ent = _rep_cache.setdefault(key, {"rep": None, "at": 0.0, "lock": threading.Lock()})
+
+    def build():
+        with ent["lock"]:
+            if ent["rep"] is not None and time.time() - ent["at"] < 5:
+                return  # someone just built it
+            ent["rep"] = _build_report(d_from, d_to, extra)
+            ent["at"] = time.time()
+
+    def build_quietly():
+        try:
+            build()
+        except Exception:
+            log.exception("Background report refresh failed")
+
+    if ent["rep"] is not None:
+        age = time.time() - ent["at"]
+        if age >= 20 and not ent["lock"].locked():
+            threading.Thread(target=build_quietly, daemon=True, name="report-refresh").start()
+        if age < 900:
+            return ent["rep"]
+    build()
+    return ent["rep"]
+
+
 @app.route("/report", methods=["GET"])
 @app.route("/report.json", methods=["GET"])
 def report():
@@ -2033,7 +2069,7 @@ def report():
 
     _ensure_live_thread()
     try:
-        rep = _build_report(d_from, d_to, request.args.get('cn', ''))
+        rep = _report_cached(d_from, d_to, request.args.get('cn', ''))
     except Exception as e:
         log.exception("Report failed")
         return f"Could not load the report from TCS: {type(e).__name__}: {str(e)[:200]}", 502
