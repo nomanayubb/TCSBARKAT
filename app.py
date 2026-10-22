@@ -185,6 +185,7 @@ status = {
     "tcs_connected": TCS_CONFIGURED,
     "tcs_missing_settings": TCS_MISSING,
     "tcs_env": TCS_ENV,
+    "auto_booking": "active",
 }
 
 
@@ -552,8 +553,15 @@ def maybe_fix_urdu(order: dict) -> None:
         log.exception("Urdu fix failed for %s", order.get("name"))
 
 
+_booking_pause = {"until": 0.0}
+
+
 def process_order(order: dict) -> None:
     order_id = order["id"]
+    if time.time() < _booking_pause["until"]:
+        return  # the old automatic booking is paused (see /status "auto_booking"); it resumes by itself
+    if status.get("auto_booking") != "active" and time.time() >= _booking_pause["until"]:
+        status["auto_booking"] = "active"
     if already_processed(order_id):
         log.info("Order %s already processed, skipping", order_id)
         return
@@ -586,6 +594,10 @@ def process_order(order: dict) -> None:
     except Exception as e:
         status["order_failures"] += 1
         _record(order, f"FAILED: {type(e).__name__}: {str(e)[:150]} (will retry)")
+        if "Mismatch configuration" in str(e):  # a setting problem, not a problem with this order: stop retrying every cycle
+            _booking_pause["until"] = time.time() + 3600
+            status["auto_booking"] = ("paused for an hour: TCS refuses the booking login (TCS_ENV is " + TCS_ENV +
+                                      "; the token only works on the live TCS host). Envio books your parcels, so nothing is lost.")
         status["last_error"] = f"{_now()} order failure: {type(e).__name__}"
         log.exception("Failed to process order %s - will retry on next catch-up pass", order_id)
         # deliberately NOT marked processed, so the catch-up loop retries it
