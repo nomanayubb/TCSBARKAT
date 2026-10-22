@@ -929,28 +929,51 @@ def _fetch_tcs_parcels(d_from: date, d_to: date, env=None) -> list:
     cur = d_from
     while cur <= d_to:
         end = min(cur + timedelta(days=6), d_to)
-        r = requests.get(
-            f"{_tcs_base(env)}/ecom/api/Payment/detail",
-            headers={"Authorization": f"Bearer {bearer}"},
-            params={  # TCS reads GET parameters from the query string
-                "accesstoken": ecom,
-                "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
-                "fromdate": cur.isoformat(),
-                "todate": end.isoformat(),
-            },
-            timeout=(10, 60),
-        )
-        if r.status_code == 401:
-            with _tcs_lock:
-                _tcs_tokens_by_env.pop(env or TCS_ENV, None)
-            raise RuntimeError(f"TCS rejected the token (401): {_tcs_reject_reason(r)}")
-        r.raise_for_status()
-        for row in ((r.json() or {}).get("detail") or []):
+        rows, last_err = None, None
+        for attempt in (1, 2):  # TCS answers 500 now and then: ask once more before giving up on this slice
+            try:
+                r = requests.get(
+                    f"{_tcs_base(env)}/ecom/api/Payment/detail",
+                    headers={"Authorization": f"Bearer {bearer}"},
+                    params={  # TCS reads GET parameters from the query string
+                        "accesstoken": ecom,
+                        "customerno": TCS_CUSTOMER_NO or TCS_ACCOUNT_NO,
+                        "fromdate": cur.isoformat(),
+                        "todate": end.isoformat(),
+                    },
+                    timeout=(10, 60),
+                )
+                if r.status_code == 401:
+                    with _tcs_lock:
+                        _tcs_tokens_by_env.pop(env or TCS_ENV, None)
+                    raise RuntimeError(f"TCS rejected the token (401): {_tcs_reject_reason(r)}")
+                r.raise_for_status()
+                rows = (r.json() or {}).get("detail") or []
+                break
+            except RuntimeError:
+                raise
+            except (requests.RequestException, ValueError) as e:
+                last_err = e
+                time.sleep(2)
+        if rows is None:
+            # a failed answer must not wipe what we knew: use the last good rows of this period (never invented ones)
+            old = [x for x in list(_pd_rows.values())
+                   if (b := _parse_dmy(x.get("booking date"))) and cur <= b <= end]
+            if not _pd_rows:
+                raise last_err
+            log.warning("TCS Payment Detail failed for %s..%s (%s): using the last good copy (%d parcels)",
+                        cur, end, str(last_err).split("?")[0][:80], len(old))
+            rows = old
+        for row in rows:
             cn = str(row.get("cn by courier") or "")
             if cn:
                 parcels[cn] = row
+                _pd_rows[cn] = row
         cur = end + timedelta(days=1)
     return list(parcels.values())
+
+
+_pd_rows = {}  # CN -> the last good Payment Detail row TCS gave for it
 
 
 TCS_REPORT_ENV = os.environ.get("TCS_REPORT_ENV", "").strip().lower()
