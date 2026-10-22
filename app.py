@@ -2751,6 +2751,45 @@ def webhook_log_page():
     return jsonify({"known_cns": len(_webhook_cns), "events": _webhook_log[::-1]}), 200
 
 
+@app.route("/dev/urdu-test", methods=["GET"])
+def urdu_test():
+    """One-off check of the Urdu fix: creates a TEST order (no email, test flag) with an
+    Urdu name/address, runs the fix, reads it back, then cancels it."""
+    if not ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), ORDERS_PAGE_KEY):
+        abort(401)
+    if request.args.get("confirm") != "yes":
+        return "Add &confirm=yes - this creates and then cancels a test order in Shopify.", 400
+    out = {}
+    try:
+        urdu = {"first_name": "محمد", "last_name": "علی",
+                "address1": "مکان نمبر 12 گلی 5 محلہ",
+                "city": "ملتان", "country_code": "PK", "phone": "03000000000"}
+        body = {"order": {"test": True, "send_receipt": False, "send_fulfillment_receipt": False,
+                          "inventory_behavior": "bypass", "financial_status": "pending", "tags": "urdu-test",
+                          "line_items": [{"title": "Urdu fix test item", "price": "1.00", "quantity": 1,
+                                          "requires_shipping": True}],
+                          "shipping_address": urdu, "billing_address": urdu}}
+        r = requests.post(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(), json=body, timeout=(10, 30))
+        if r.status_code >= 400:
+            return jsonify({"step": "create order", "http": r.status_code, "reply": r.text[:200]}), 502
+        order = r.json()["order"]
+        out["created"] = order.get("name")
+        maybe_fix_urdu(order)
+        out["fix_error"] = status.get("urdu_fix_error")
+        back = requests.get(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
+                            params={"fields": "name,tags,note,shipping_address"}, timeout=(10, 30)).json()["order"]
+        sa = back.get("shipping_address") or {}
+        out["after"] = {k: sa.get(k) for k in ("first_name", "last_name", "address1", "city")}
+        out["tags"] = back.get("tags")
+        out["note_has_original"] = "Original Urdu text" in str(back.get("note") or "")
+        c = requests.post(f"{SHOPIFY_BASE}/orders/{order['id']}/cancel.json", headers=shopify_headers(),
+                          json={"email": False, "restock": False}, timeout=(10, 30))
+        out["cancelled"] = c.status_code < 400
+    except Exception as e:
+        out["error"] = f"{type(e).__name__}: {str(e)[:150]}"
+    return jsonify(out), 200
+
+
 _scopes_cache = {"at": 0.0, "scopes": []}
 
 
