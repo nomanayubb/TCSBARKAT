@@ -1041,7 +1041,21 @@ def register(flask_app, app_module):
     global A
     A = app_module
 
-    threading.Thread(target=_watch, daemon=True, name="change-watch").start()
+    # A thread started here (at import) does not survive when the web server forks its worker afterwards, so the bell
+    # never saw a change. Start it (and restart it if it ever stops) from the first request, in the worker itself.
+    wt = {"t": None}
+    wt_lock = threading.Lock()
+
+    @flask_app.before_request
+    def _ensure_watch():
+        t = wt["t"]
+        if t is not None and t.is_alive():
+            return
+        with wt_lock:
+            t = wt["t"]
+            if t is None or not t.is_alive():
+                wt["t"] = threading.Thread(target=_watch, daemon=True, name="change-watch")
+                wt["t"].start()
 
     @flask_app.route("/changes.json")
     def changes_json():
