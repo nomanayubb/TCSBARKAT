@@ -581,20 +581,28 @@ _urdu_scan = {"started": False}
 def _urdu_scan_once() -> int:
     """Look at the newest open orders and convert any Urdu name/address. Read-only until
     an order with Urdu is found; does nothing until Shopify has approved write_orders."""
+    info = status.setdefault("urdu_scan", {"runs": 0})
+    info["runs"] += 1
+    info["last_at"] = _now()
     if not URDU_AUTOFIX or "write_orders" not in _granted_scopes():
+        info["skipped"] = "no write_orders yet or fix switched off"
         return 0
+    info.pop("skipped", None)
     since = (datetime.utcnow() - timedelta(days=3)).isoformat() + "Z"
     r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(), timeout=(10, 30), params={
         "status": "open", "limit": 100, "created_at_min": since,
         "fields": "id,name,tags,note,cancelled_at,fulfillment_status,shipping_address,billing_address"})
     r.raise_for_status()
     found = 0
-    for o in r.json().get("orders", []):
+    orders = r.json().get("orders", [])
+    info["orders_read"] = len(orders)
+    for o in orders:
         if "Original Urdu text:" in str(o.get("note") or ""):
             continue
         before = len(_urdu_seen)
         maybe_fix_urdu(o)
         found += len(_urdu_seen) - before
+    info["with_urdu_found"] = found
     return found
 
 
