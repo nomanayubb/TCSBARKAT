@@ -45,7 +45,7 @@ WORDS = {
     "چکوال": "Chakwal", "اٹک": "Attock", "منڈی بہاؤالدین": "Mandi Bahauddin", "نارووال": "Narowal",
     "شیخوپورہ": "Sheikhupura", "جھنگ": "Jhang", "ٹوبہ ٹیک سنگھ": "Toba Tek Singh", "بہاولنگر": "Bahawalnagar",
     "بورے والا": "Burewala", "بورے والہ": "Burewala", "ڈاک خانہ": "Dak Khana", "ڈاکخانہ": "Dak Khana",
-    "بنگلہ": "Bangla", "جوئیہ": "Joiya", "جو یہ": "Joiya", "جویہ": "Joiya", "کے بی": "KB", "وہاڑی": "Vehari", "خانیوال": "Khanewal",
+    "بنگلہ": "Bangla", "کے بی": "KB", "وہاڑی": "Vehari", "خانیوال": "Khanewal",
     "والا": "wala", "والی": "wali", "والے": "wale", "وزیرآباد": "Wazirabad", "وزیر آباد": "Wazirabad",
     "واہ کینٹ": "Wah Cantt", "واہ": "Wah", "وہاب": "Wahab", "وقاص": "Waqas", "وسیم": "Waseem",
     "وحید": "Waheed", "ولید": "Waleed", "وقار": "Waqar", "ملتان روڈ": "Multan Road",
@@ -75,7 +75,7 @@ def _word(word: str) -> str:
     out = []
     for i, ch in enumerate(word):
         nxt = word[i + 1] if i + 1 < len(word) else ""
-        if ch == "و" and nxt in "اآیےِ":  # و before a vowel letter = w (wala, wali)
+        if ch == "و" and nxt and nxt in "اآیےِ":  # و before a vowel letter = w (wala, wali)
             out.append("w")
         else:
             out.append(LETTERS.get(ch, ch))
