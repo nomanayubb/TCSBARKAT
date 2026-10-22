@@ -517,16 +517,33 @@ URDU_AUTOFIX = os.environ.get("URDU_AUTOFIX", "true").strip().lower() != "false"
 _ADDR_FIELDS = ("first_name", "last_name", "company", "address1", "address2", "city", "province")
 
 
+_urdu_seen = set()  # order ids already handled by this process (the order tag covers restarts)
+
+
 def maybe_fix_urdu(order: dict) -> None:
     """Customers sometimes type their name/address in Urdu, which TCS cannot read.
-    Rewrite those fields in English letters on the Shopify order (original kept in the
-    order note) and in the order dict used for booking. Never raises."""
-    if not URDU_AUTOFIX:
-        return
+    Quick local checks only; the Shopify call runs in a background thread so it can
+    never slow down or break the normal order flow. Never raises."""
     try:
-        tags = [t.strip() for t in str(order.get("tags") or "").split(",") if t.strip()]
-        if "urdu-converted" in tags:
+        if not URDU_AUTOFIX or order.get("id") in _urdu_seen:
             return
+        if order.get("cancelled_at") or order.get("fulfillment_status") == "fulfilled":
+            return  # never touch cancelled or fulfilled orders
+        if not any(urdu_fix.has_urdu((order.get(k) or {}).get(f))
+                   for k in ("shipping_address", "billing_address") for f in _ADDR_FIELDS):
+            return  # English-only orders are never changed
+        _urdu_seen.add(order.get("id"))
+        threading.Thread(target=_urdu_fix_now, args=(order,), daemon=True, name="urdu-fix").start()
+    except Exception:
+        log.exception("Urdu fix could not start for %s", order.get("name"))
+
+
+def _urdu_fix_now(order: dict) -> None:
+    """Rewrite the Urdu name/address fields in English letters on the Shopify order
+    (original kept in the order note). Changes only name/address text, a note and a tag."""
+    try:
+        if "Original Urdu text:" in str(order.get("note") or ""):
+            return  # already converted once
         payload, originals = {}, []
         for key in ("shipping_address", "billing_address"):
             addr = order.get(key) or {}
@@ -537,7 +554,7 @@ def maybe_fix_urdu(order: dict) -> None:
         if not payload:
             return
         note = (str(order.get("note") or "") + chr(10) + "Original Urdu text: " + " | ".join(originals)).strip()
-        body = {"order": dict(payload, id=order["id"], note=note, tags=", ".join(tags + ["urdu-converted"]))}
+        body = {"order": dict(payload, id=order["id"], note=note)}  # name/address text + the note only
         r = requests.put(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
                          json=body, timeout=(10, 30))
         if r.status_code == 403:  # the cached 24h token may predate a newly approved permission
@@ -555,6 +572,51 @@ def maybe_fix_urdu(order: dict) -> None:
     except Exception as e:
         status["urdu_fix_error"] = f"{order.get('name')}: {type(e).__name__}"
         log.exception("Urdu fix failed for %s", order.get("name"))
+
+
+URDU_SCAN_SECONDS = 30
+_urdu_scan = {"started": False}
+
+
+def _urdu_scan_once() -> int:
+    """Look at the newest open orders and convert any Urdu name/address. Read-only until
+    an order with Urdu is found; does nothing until Shopify has approved write_orders."""
+    if not URDU_AUTOFIX or "write_orders" not in _granted_scopes():
+        return 0
+    since = (datetime.utcnow() - timedelta(days=3)).isoformat() + "Z"
+    r = requests.get(f"{SHOPIFY_BASE}/orders.json", headers=shopify_headers(), timeout=(10, 30), params={
+        "status": "open", "limit": 100, "created_at_min": since,
+        "fields": "id,name,tags,note,cancelled_at,fulfillment_status,shipping_address,billing_address"})
+    r.raise_for_status()
+    found = 0
+    for o in r.json().get("orders", []):
+        if "Original Urdu text:" in str(o.get("note") or ""):
+            continue
+        before = len(_urdu_seen)
+        maybe_fix_urdu(o)
+        found += len(_urdu_seen) - before
+    return found
+
+
+def _urdu_scan_loop():
+    while True:
+        try:
+            _urdu_scan_once()
+        except Exception as e:
+            status["urdu_fix_error"] = f"scan: {type(e).__name__}"
+            log.exception("Urdu scan failed")
+        time.sleep(URDU_SCAN_SECONDS)
+
+
+@app.before_request
+def _start_urdu_scan():
+    if _urdu_scan["started"]:
+        return
+    with _tcs_lock:
+        if _urdu_scan["started"]:
+            return
+        _urdu_scan["started"] = True
+    threading.Thread(target=_urdu_scan_loop, daemon=True, name="urdu-scan").start()
 
 
 _booking_pause = {"until": 0.0}
