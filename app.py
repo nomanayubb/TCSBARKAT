@@ -621,8 +621,68 @@ def _start_urdu_scan():
 
 _booking_pause = {"until": 0.0}
 
+# ------------------------------------------------ no-duplicate guard for the automatic booking
+BOOKED_CNS_FILE = PROCESSED_ORDERS_FILE.with_name("booked_cns.json")  # order id -> CN we booked (survives a failed Shopify update)
+_inflight = set()          # orders being processed right now (webhook and catch-up must never book the same order together)
+_inflight_lock = threading.Lock()
+_booking_times = []        # time of each real booking, for the hourly cap
+MAX_BOOKINGS_PER_HOUR = int(os.environ.get("MAX_BOOKINGS_PER_HOUR", "30"))
+FRESH_ORDER_GRACE_SECONDS = 90   # a brand-new order waits a moment so another booking path can book it first
+_grace_scheduled = set()
+
+
+def _booked_cn_for(order_id):
+    try:
+        return (json.loads(BOOKED_CNS_FILE.read_text()) or {}).get(str(order_id))
+    except Exception:
+        return None
+
+
+def _remember_booked(order_id, cn) -> None:
+    with _lock:
+        try:
+            data = json.loads(BOOKED_CNS_FILE.read_text())
+        except Exception:
+            data = {}
+        data[str(order_id)] = str(cn)
+        BOOKED_CNS_FILE.write_text(json.dumps(data))
+
+
+def _tcs_cn_for_reference(ref: str):
+    """CN if TCS already has a parcel with this order reference, None if it surely has not.
+    Raises when TCS cannot answer, so the caller does NOT book (booking blind could duplicate)."""
+    if time.time() < _tcs_backoff["until"]:
+        raise RuntimeError("TCS lookups are paused after an error answer")
+    plain = str(ref).strip().lstrip("#")
+    for q in dict.fromkeys([str(ref).strip(), plain, "#" + plain]):
+        with _TCS_SEM:
+            r = requests.get(f"{_tcs_base('connect')}/tracking/api/Tracking/GetDynamicTrackDetail",
+                             headers={"Authorization": f"Bearer {TCS_BEARER_TOKEN}"},
+                             params={"consignee": q}, timeout=(10, 30))
+        if r.status_code in (401, 403, 429, 500, 502, 503, 504):
+            _tcs_backoff["until"] = time.time() + 60
+            raise RuntimeError(f"TCS lookup answered {r.status_code}")
+        info = ((r.json() or {}).get("shipmentinfo") or [None])[0] if r.ok else None
+        if info and str(info.get("referenceno") or "").strip().lstrip("#") == plain:
+            return str(info.get("consignmentno") or "found")
+    return None
+
 
 def process_order(order: dict) -> None:
+    """Runs one order at a time (never two threads on the same order) - see _process_order_locked."""
+    order_id = str(order["id"])
+    with _inflight_lock:
+        if order_id in _inflight:
+            return
+        _inflight.add(order_id)
+    try:
+        _process_order_locked(order)
+    finally:
+        with _inflight_lock:
+            _inflight.discard(order_id)
+
+
+def _process_order_locked(order: dict) -> None:
     order_id = order["id"]
     if time.time() < _booking_pause["until"]:
         return  # the old automatic booking is paused (see /status "auto_booking"); it resumes by itself
@@ -642,7 +702,31 @@ def process_order(order: dict) -> None:
         shipping.get("first_name") and shipping.get("address1") and shipping.get("phone")
     )
     try:
-        booking = book_tcs_shipment(order)
+        mine = _booked_cn_for(order_id)  # we booked it earlier but Shopify was not updated: only fulfil, never book again
+        if TCS_CONFIGURED and not mine:
+            try:
+                age = time.time() - datetime.fromisoformat(str(order.get("created_at"))).timestamp()
+            except Exception:
+                age = FRESH_ORDER_GRACE_SECONDS
+            if age < FRESH_ORDER_GRACE_SECONDS:  # let the other booking path go first, then look again
+                if str(order_id) not in _grace_scheduled:
+                    _grace_scheduled.add(str(order_id))
+                    threading.Timer(FRESH_ORDER_GRACE_SECONDS - age + 5, lambda: (_grace_scheduled.discard(str(order_id)), process_order(order))).start()
+                return
+            found = _tcs_cn_for_reference(str(order.get("name") or order_id))
+            if found:
+                log.info("Order %s is already booked at TCS (CN %s): not booking again", order_id, found)
+                _record(order, f"already at TCS (CN {found}): not booked again")
+                mark_processed(order_id)
+                return
+            _booking_times[:] = [t for t in _booking_times if time.time() - t < 3600]
+            if len(_booking_times) >= MAX_BOOKINGS_PER_HOUR:
+                _record(order, "booking limit per hour reached: waiting")
+                return
+        booking = {"tracking_number": mine, "tracking_url": ""} if mine else book_tcs_shipment(order)
+        if not mine and not booking.get("simulated") and not booking.get("sandbox"):
+            _booking_times.append(time.time())
+            _remember_booked(order_id, booking["tracking_number"])  # recorded before touching Shopify
         if (booking.get("simulated") or booking.get("sandbox")) and not ALLOW_SIMULATED_FULFILLMENT:
             # Safety: never fulfil a real order with a fake/test tracking number
             # (the customer would be emailed it).
