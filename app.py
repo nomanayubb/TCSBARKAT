@@ -2735,9 +2735,26 @@ def webhook_log_page():
     return jsonify({"known_cns": len(_webhook_cns), "events": _webhook_log[::-1]}), 200
 
 
+_scopes_cache = {"at": 0.0, "scopes": []}
+
+
+def _granted_scopes() -> list:
+    if time.time() - _scopes_cache["at"] > 300:
+        try:
+            r = requests.get(f"https://{SHOPIFY_STORE_DOMAIN}/admin/oauth/access_scopes.json",
+                             headers=shopify_headers(), timeout=(10, 20))
+            _scopes_cache["scopes"] = [x["handle"] for x in r.json().get("access_scopes", [])]
+        except Exception:
+            _scopes_cache["scopes"] = ["(could not read)"]
+        _scopes_cache["at"] = time.time()
+    return _scopes_cache["scopes"]
+
+
 @app.route("/status", methods=["GET"])
 def status_page():
-    return dict(status, now=_now()), 200
+    scopes = _granted_scopes()
+    return dict(status, now=_now(), shopify_scopes=scopes,
+                urdu_fix_ready=("write_orders" in scopes and URDU_AUTOFIX)), 200
 
 
 @app.route("/health", methods=["GET"])
