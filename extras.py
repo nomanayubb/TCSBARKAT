@@ -792,6 +792,8 @@ def _watch():
                         _diff(CH["snap"], snap)
                     else:
                         CH["seen"].update(snap["parcels"])
+                    if snap["parcels"] and not CH.get("filled"):  # the first snapshot that really holds parcels
+                        CH["filled"] = True
                         _backfill(snap)
                     CH["snap"], CH["marks"] = snap, marks
         except Exception:
