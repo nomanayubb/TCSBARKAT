@@ -792,6 +792,7 @@ def _diff(old, new):
 
 def _watch():
     while True:
+        CH["loops"] = CH.get("loops", 0) + 1
         try:
             marks = (A._live.get("at"), A._envio_data.get("at"))
             if marks != CH["marks"] and rep():
@@ -1050,7 +1051,9 @@ def register(flask_app, app_module):
         except ValueError:
             since = 0
         return jsonify({"changes": [c for c in CH["log"] if c["id"] > since][-500:], "max": CH["seq"],
-                        "watch": {"has_snapshot": CH["snap"] is not None, "filled": bool(CH.get("filled")), "error": CH.get("err", "")}}), 200
+                        "watch": {"has_snapshot": CH["snap"] is not None, "filled": bool(CH.get("filled")), "error": CH.get("err", ""),
+                                  "loops": CH.get("loops", 0), "alive": any(t.name == "change-watch" for t in threading.enumerate()),
+                                  "rep_ready": bool(rep()), "marks_set": CH["marks"] != (None, None)}}), 200
 
     @flask_app.route("/tools")
     def tools_page():
