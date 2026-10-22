@@ -77,3 +77,8 @@ Status: **done** = live on the report, **next** = designed, not built yet. Every
 - "More tables" at the bottom of the report: hidden until you add one from the list; each loads only when added.
 - Printable weekly statement, JSON backup, daily digest and message text, settings and freshness checks.
 - Safety: at most 4 TCS tracking calls at once, 60 second pause after an error answer from TCS, a failed answer never wipes known data, 5 minute pause after a failed Envio sign-in (protects the account from locking).
+
+## Pages (batch 4)
+Older pages: `/report`, `/orders`, `/products` (product report), `/track`, `/status`, `/webhook-log`.
+New pages, all with the same navigation bar and the change bell: `/p/dashboard` (KPI cards + charts), `/board` (parcel board with seven columns),
+`/p/operations`, `/p/cities`, `/p/products` (product analysis), `/p/finance`, `/p/returns`, `/p/webhooks`, and `/tools` (all 57 tools).

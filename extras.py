@@ -778,6 +778,97 @@ NOTIFY_JS = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search
 LINK_HTML = '<script>\n(function(){\nvar KEY=new URLSearchParams(location.search).get(\'key\')||\'\';\nif(document.getElementById(\'xtlink\')) return;\nfunction esc(s){return String(s==null?\'\':s).replace(/[&<>"]/g,function(c){return {\'&\':\'&amp;\',\'<\':\'&lt;\',\'>\':\'&gt;\',\'"\':\'&quot;\'}[c]})}\nvar a=document.createElement(\'a\'); a.id=\'xtlink\'; a.href=\'/tools?key=\'+encodeURIComponent(KEY); a.textContent=\'Analysis & tools\';\na.style.cssText=\'position:fixed;top:14px;right:64px;z-index:80;background:#1d3557;color:#fff;padding:6px 12px;border-radius:18px;text-decoration:none;font:13px system-ui,sans-serif;box-shadow:0 2px 8px rgba(0,0,0,.25)\';\ndocument.body.appendChild(a);\nvar sec=document.createElement(\'div\'); sec.id=\'xtsec\'; sec.style.cssText=\'margin:24px 16px\';\nsec.innerHTML=\'<h3>More tables <small style="font-weight:normal;color:#777">(hidden until you add them; each one loads only when added)</small></h3><select id="xtsel" style="padding:5px;max-width:360px"><option value="">Add a table...</option></select><div id="xtlist"></div>\';\ndocument.body.appendChild(sec);\nvar META=[], chosen=[];\nfunction ls(k,v){try{if(v===undefined)return localStorage.getItem(k);localStorage.setItem(k,v)}catch(e){return null}}\ntry{chosen=JSON.parse(ls(\'xtools\')||\'[]\')}catch(e){chosen=[]}\nfunction save(){ls(\'xtools\',JSON.stringify(chosen))}\nfunction box(id){return document.getElementById(\'xt_\'+id)}\nfunction draw(id,d){\n  var b=box(id); if(!b) return; var h=\'\';\n  if(d.note) h+=\'<p><small>\'+esc(d.note)+\'</small></p>\';\n  if(d.type===\'text\'){h+=\'<pre style="white-space:pre-wrap">\'+esc(d.text)+\'</pre>\'}\n  else{var mx=1; if(d.bar!=null) d.rows.forEach(function(r){mx=Math.max(mx,parseFloat(String(r[d.bar]).replace(/,/g,\'\'))||0)});\n    h+=\'<div class="w"><table><tr>\'+d.columns.map(function(c){return \'<th>\'+esc(c)+\'</th>\'}).join(\'\')+\'</tr>\';\n    d.rows.forEach(function(r){h+=\'<tr>\'+r.map(function(c,i){var bb=\'\';if(d.bar===i){var v=parseFloat(String(c).replace(/,/g,\'\'))||0;bb=\'<span style="display:inline-block;height:10px;background:#12803c;margin-left:6px;width:\'+Math.round(140*v/mx)+\'px"></span>\'}return \'<td>\'+esc(c)+bb+\'</td>\'}).join(\'\')+\'</tr>\'});\n    h+=\'</table></div>\'+(d.rows.length?\'\':\'<p>Nothing to show yet.</p>\')}\n  b.querySelector(\'.xtbody\').innerHTML=h;\n}\nfunction load(id){fetch(\'/tools/data/\'+id+\'.json?key=\'+encodeURIComponent(KEY),{cache:\'no-store\'}).then(function(r){return r.json()}).then(function(d){draw(id,d)}).catch(function(){})}\nfunction add(id){\n  var m=META.filter(function(t){return t.id===id})[0]; if(!m||box(id)) return;\n  var d=document.createElement(\'div\'); d.id=\'xt_\'+id; d.style.cssText=\'margin:14px 0;border:1px solid #bbb;border-radius:8px;padding:8px 12px\';\n  d.innerHTML=\'<b>\'+esc(m.group)+\': \'+esc(m.title)+\'</b> <button class="xtx" style="float:right">Hide</button><div class="xtbody">Loading...</div>\';\n  d.querySelector(\'.xtx\').onclick=function(){d.remove();chosen=chosen.filter(function(x){return x!==id});save()};\n  document.getElementById(\'xtlist\').appendChild(d); load(id);\n}\nfetch(\'/tools/list.json?key=\'+encodeURIComponent(KEY)).then(function(r){return r.json()}).then(function(l){\n  META=l.filter(function(t){return !t.param});\n  var sel=document.getElementById(\'xtsel\'), g=\'\', og=null;\n  META.forEach(function(t){if(t.group!==g){g=t.group;og=document.createElement(\'optgroup\');og.label=g;sel.appendChild(og)}var o=document.createElement(\'option\');o.value=t.id;o.textContent=t.title;og.appendChild(o)});\n  sel.onchange=function(){var id=sel.value;sel.value=\'\';if(!id)return;if(chosen.indexOf(id)<0){chosen.push(id);save()}add(id)};\n  chosen.forEach(add);\n});\nsetInterval(function(){if(document.hidden)return;chosen.forEach(load)},30000);\n})();\n</script>\n'
 
 
+# ================================================================== EXTRA PAGES (each one stacks tools, or is a board)
+PAGES = {
+    "dashboard": ("Dashboard", ["status_mix", "bookings_day", "deliveries_day", "city_share"]),
+    "operations": ("Operations", ["aging", "longest_transit", "action_steps", "step_freq", "step_age", "stuck_by_city", "unbooked_age", "dup_refs"]),
+    "cities": ("Cities", ["city_share", "city_returns", "slow_cities", "fast_cities", "cod_by_city", "stuck_by_city"]),
+    "products": ("Products", ["product_matrix", "product_value", "ret_product_reason"]),
+    "finance": ("Finance", ["week_money", "gap_tracker", "pay_delay", "tax_summary", "return_loss", "avg_fee", "cod_waiting",
+                            "running_net", "week_compare", "cod_by_week"]),
+    "returns": ("Returns", ["ret_list", "ret_repeat", "ret_reasons", "ret_city_refusals", "ret_months"]),
+    "webhooks": ("Webhook", ["ev_status", "ev_hours", "ev_hours_local", "ev_parcels", "ev_latency", "ev_silent", "ev_transitions", "ev_cities"]),
+}
+NAV_ORDER = ["dashboard", "board", "operations", "cities", "products", "finance", "returns", "webhooks"]
+
+SHELL_CSS = """<style>
+body{font-family:system-ui,sans-serif;margin:0;padding:0 0 40px}
+#pnav{display:flex;gap:6px;flex-wrap:wrap;padding:10px 70px 10px 14px;background:#1d3557;position:sticky;top:0;z-index:50}
+#pnav a{color:#fff;text-decoration:none;padding:5px 11px;border-radius:14px;font-size:14px;background:rgba(255,255,255,.12)}
+#pnav a.on{background:#fff;color:#1d3557;font-weight:bold}
+#pbody{padding:14px}
+.box{border:1px solid #bbb;border-radius:8px;padding:8px 14px;margin:14px 0}
+.box h3{margin:4px 0}
+table{border-collapse:collapse;margin:6px 0}th,td{border:1px solid #ccc;padding:4px 9px;text-align:left;font-size:14px}th{background:#f2f2f2}
+.bar{display:inline-block;height:10px;background:#12803c;margin-left:6px}
+.cards{display:flex;flex-wrap:wrap;gap:10px}.cd{border:1px solid #bbb;border-radius:8px;padding:8px 16px;min-width:130px}.cd b{display:block;font-size:24px}
+.col{flex:1;min-width:210px;background:#f4f6f8;border-radius:8px;padding:8px}.col h4{margin:2px 0 8px}
+.card{background:#fff;border:1px solid #ccc;border-left:5px solid #888;border-radius:6px;padding:6px 8px;margin:6px 0;font-size:13px}
+@media (prefers-color-scheme:dark){body{background:#111;color:#eee}th{background:#222}th,td,.box,.cd{border-color:#444}.col{background:#1b1b1b}.card{background:#222;border-color:#444}}
+</style>"""
+
+SHELL_JS = """<script>
+var KEY=new URLSearchParams(location.search).get('key')||'', IDS=IDSJSON;
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function draw(id,d){var b=document.getElementById('b_'+id); if(!b)return; var h='';
+  if(d.note)h+='<p><small>'+esc(d.note)+'</small></p>';
+  if(d.type==='text'){h+='<pre style="white-space:pre-wrap">'+esc(d.text)+'</pre>'}
+  else{var mx=1;if(d.bar!=null)d.rows.forEach(function(r){mx=Math.max(mx,parseFloat(String(r[d.bar]).replace(/,/g,''))||0)});
+    h+='<div style="overflow-x:auto"><table><tr>'+d.columns.map(function(c){return '<th>'+esc(c)+'</th>'}).join('')+'</tr>';
+    d.rows.forEach(function(r){h+='<tr>'+r.map(function(c,i){var bb='';if(d.bar===i){var v=parseFloat(String(c).replace(/,/g,''))||0;bb='<span class="bar" style="width:'+Math.round(150*v/mx)+'px"></span>'}return '<td>'+esc(c)+bb+'</td>'}).join('')+'</tr>'});
+    h+='</table></div>'+(d.rows.length?'':'<p>Nothing to show yet.</p>')+'<a href="/tools/data/'+id+'.csv?key='+encodeURIComponent(KEY)+'">Download CSV</a>'}
+  b.innerHTML=h}
+function load(id){fetch('/tools/data/'+id+'.json?key='+encodeURIComponent(KEY),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){draw(id,d)}).catch(function(){})}
+function loadAll(){IDS.forEach(function(x){load(x[0])})}
+var body=document.getElementById('pbody'); IDS.forEach(function(x){var d=document.createElement('div');d.className='box';d.innerHTML='<h3>'+esc(x[1])+'</h3><div id="b_'+x[0]+'">Loading...</div>';body.appendChild(d)});
+loadAll(); setInterval(function(){if(!document.hidden)loadAll()},20000);
+function kpi(){var el=document.getElementById('kpis'); if(!el)return;
+  fetch('/insights.json?key='+encodeURIComponent(KEY),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){if(!d.cards)return;var c=d.cards;
+   el.innerHTML='<div class="cd">Success rate<b>'+c.success+'%</b></div><div class="cd">Avg delivery<b>'+c.avg_days+' days</b></div><div class="cd">Delivered<b>'+c.delivered+'</b></div><div class="cd">In transit<b>'+c.transit+'</b></div><div class="cd">Returned / refused<b>'+c.returned+'</b></div><div class="cd">Needs action<b>'+c.action+'</b></div><div class="cd">Stuck<b>'+(d.stuck||[]).length+'</b></div>'})}
+kpi(); setInterval(kpi,20000);
+</script>"""
+
+BOARD_JS = """<script>
+var KEY=new URLSearchParams(location.search).get('key')||'';
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function load(){fetch('/board.json?key='+encodeURIComponent(KEY),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){
+  if(!d.columns)return; document.getElementById('cols').innerHTML=d.columns.map(function(c){
+   return '<div class="col"><h4>'+esc(c.title)+' ('+c.total+')</h4>'+c.cards.map(function(k){return '<div class="card" style="border-left-color:'+c.color+'"><b>'+esc(k.order)+'</b> &middot; '+esc(k.city)+'<br><small>'+esc(k.step)+(k.when?' &middot; '+esc(k.when):'')+'</small></div>'}).join('')+(c.total>c.cards.length?'<small>+ '+(c.total-c.cards.length)+' more</small>':'')+'</div>'}).join('')})}
+load(); setInterval(function(){if(!document.hidden)load()},15000);
+</script>"""
+
+
+def nav_html(active, key):
+    # the pages made earlier, then the new ones
+    old = [("Report", "/report"), ("Orders", "/orders"), ("Product report", "/products"), ("Track", "/track")]
+    items = [("dashboard", "Dashboard"), ("board", "Board"), ("operations", "Operations"), ("cities", "Cities"),
+             ("products", "Product analysis"), ("finance", "Finance"), ("returns", "Returns"), ("webhooks", "Webhook")]
+    h = "<div id='pnav'>" + "".join(f"<a href='{u}?key={key}'>{l}</a>" for l, u in old)
+    for k, label in items:
+        url = f"/board?key={key}" if k == "board" else f"/p/{k}?key={key}"
+        h += f"<a href='{url}'{' class=on' if k == active else ''}>{label}</a>"
+    return h + f"<a href='/tools?key={key}'{' class=on' if active == 'tools' else ''}>All tools</a></div>"
+
+
+def board_data():
+    ps = parcels()
+    act = [p for p in ps if state_group(p) == "transit" and any(w in str(p.get("last_event") or "").lower() for w in A._ACTION_WORDS)]
+    act_cn = {p["cn"] for p in act}
+    paid = {str(l.get("ConsignmentNumber")) for l in lines() if num(l.get("CODAmount")) > 0}
+
+    def card(p):
+        return {"order": p.get("order") or p["cn"], "city": p.get("city") or "", "step": p.get("last_event") or p.get("status") or "",
+                "when": p.get("last_time") or ""}
+    cols = [("Needs action", "#e63946", act),
+            ("In transit", "#457b9d", [p for p in ps if state_group(p) == "transit" and p["cn"] not in act_cn]),
+            ("Delivered, not paid", "#f4a261", [p for p in ps if p.get("state") == "delivered" and str(p["cn"]) not in paid]),
+            ("Refused (not returning yet)", "#8b4513", [p for p in ps if p.get("state") == "rejected"]),
+            ("Return to origin", "#7a1fa2", [p for p in ps if p.get("state") == "returning"]),
+            ("Return to shipper", "#555555", [p for p in ps if p.get("state") == "returned"]),
+            ("Delivered and paid", "#12803c", [p for p in ps if p.get("state") == "delivered" and str(p["cn"]) in paid])]
+    return [{"title": t, "color": c, "total": len(items), "cards": [card(p) for p in items[:60]]} for t, c, items in cols]
+
+
 # ================================================================== routes
 def _ok():
     if not A.ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), A.ORDERS_PAGE_KEY):
@@ -821,7 +912,7 @@ pre{white-space:pre-wrap;background:#f6f6f6;padding:10px;border-radius:6px}
 @media (prefers-color-scheme:dark){body{background:#111;color:#eee}#nav{border-color:#444}th{background:#222}th,td{border-color:#444}pre{background:#1b1b1b}}
 @media (max-width:700px){body{display:block}#nav{width:auto;position:static;max-height:none}}
 </style>
-<div id='nav'><a href='/report?key=KEYVAL' style='font-weight:bold'>&larr; Back to the report</a><input id='q' placeholder='Find a tool...'><div id='list'></div></div>
+<div id='nav'><a href='/report?key=KEYVAL' style='font-weight:bold'>&larr; Back to the report</a><div style='margin:6px 0 10px;line-height:1.9'><a href='/orders?key=KEYVAL'>Orders</a> <a href='/products?key=KEYVAL'>Product report</a> <a href='/track?key=KEYVAL'>Track</a><br><a href='/p/dashboard?key=KEYVAL'>Dashboard</a> <a href='/board?key=KEYVAL'>Board</a> <a href='/p/operations?key=KEYVAL'>Operations</a> <a href='/p/cities?key=KEYVAL'>Cities</a> <a href='/p/products?key=KEYVAL'>Product analysis</a> <a href='/p/finance?key=KEYVAL'>Finance</a> <a href='/p/returns?key=KEYVAL'>Returns</a> <a href='/p/webhooks?key=KEYVAL'>Webhook</a></div><input id='q' placeholder='Find a tool...'><div id='list'></div></div>
 <div id='main'><h2 id='ttl'>Pick a tool on the left</h2><div id='ptool'></div><div id='out'></div></div>
 <script>
 var KEY=new URLSearchParams(location.search).get('key')||'', TOOLS=TOOLSJSON, cur=null, timer=null;
@@ -872,6 +963,33 @@ def register(flask_app, app_module):
         meta = [{"id": t["id"], "group": t["group"], "title": t["title"], "param": t["param"]} for t in _ordered()]
         return (PAGE.replace("TOOLSJSON", json.dumps(meta)).replace("KEYVAL", request.args.get("key", ""))
                 + NOTIFY_JS), 200
+
+    @flask_app.route("/p/<name>")
+    def page_of_tools(name):
+        _ok()
+        if name not in PAGES:
+            abort(404)
+        title, ids = PAGES[name]
+        key = request.args.get("key", "")
+        meta = [[i, (_find(i) or {"title": i})["title"]] for i in ids if _find(i)]
+        kpis = "<div class='cards' id='kpis' style='margin:6px 0'></div>" if name == "dashboard" else ""
+        return ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                f"<title>{title} - TCS</title>" + SHELL_CSS + nav_html(name, key)
+                + f"<div id='pbody'><h2>{title}</h2>{kpis}</div>" + SHELL_JS.replace("IDSJSON", json.dumps(meta)) + NOTIFY_JS), 200
+
+    @flask_app.route("/board")
+    def board_page():
+        _ok()
+        key = request.args.get("key", "")
+        return ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Board - TCS</title>" + SHELL_CSS + nav_html("board", key)
+                + "<div id='pbody'><h2>Parcel board</h2><div id='cols' style='display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start'>Loading...</div></div>"
+                + BOARD_JS + NOTIFY_JS), 200
+
+    @flask_app.route("/board.json")
+    def board_json():
+        _ok()
+        return jsonify({"columns": board_data()}), 200
 
     @flask_app.route("/tools/list.json")
     def tools_list():
