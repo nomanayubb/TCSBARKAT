@@ -44,6 +44,11 @@ WORDS = {
     "ایبٹ آباد": "Abbottabad", "مردان": "Mardan", "سوات": "Swat", "کوہاٹ": "Kohat", "بنوں": "Bannu",
     "چکوال": "Chakwal", "اٹک": "Attock", "منڈی بہاؤالدین": "Mandi Bahauddin", "نارووال": "Narowal",
     "شیخوپورہ": "Sheikhupura", "جھنگ": "Jhang", "ٹوبہ ٹیک سنگھ": "Toba Tek Singh", "بہاولنگر": "Bahawalnagar",
+    "بورے والا": "Burewala", "بورے والہ": "Burewala", "ڈاک خانہ": "Post Office", "ڈاکخانہ": "Post Office",
+    "بنگلہ": "Bangla", "جوئیہ": "Joiya", "کے بی": "KB", "وہاڑی": "Vehari", "خانیوال": "Khanewal",
+    "والا": "wala", "والی": "wali", "والے": "wale", "وزیرآباد": "Wazirabad", "وزیر آباد": "Wazirabad",
+    "واہ کینٹ": "Wah Cantt", "واہ": "Wah", "وہاب": "Wahab", "وقاص": "Waqas", "وسیم": "Waseem",
+    "وحید": "Waheed", "ولید": "Waleed", "وقار": "Waqar", "ملتان روڈ": "Multan Road",
     "پوسٹ آفس": "Post Office", "ڈاکخانہ": "Post Office", "اڈا": "Adda", "موڑ": "Mor",
 }
 
@@ -68,8 +73,12 @@ def has_urdu(text) -> bool:
 
 def _word(word: str) -> str:
     out = []
-    for ch in word:
-        out.append(LETTERS.get(ch, ch))
+    for i, ch in enumerate(word):
+        nxt = word[i + 1] if i + 1 < len(word) else ""
+        if ch == "و" and nxt in "اآیےِ":  # و before a vowel letter = w (wala, wali)
+            out.append("w")
+        else:
+            out.append(LETTERS.get(ch, ch))
     # put an 'a' between consecutive consonants so it can be read: mhmd -> mahamad
     spelled = ""
     for i, piece in enumerate(out):
