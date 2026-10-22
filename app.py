@@ -1340,7 +1340,14 @@ def _build_report_core(d_from: date, d_to: date, extra: str = "") -> dict:
                     "fuel": std["fuel"], "osa": 0.0, "stax": std["stax"], "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0,
                     "net": round(-(std["shipping"] + std["fuel"] + std["stax"]), 2)})
         payments.sort(key=lambda p: (p["booked"], str(p["cn"])), reverse=True)
-    pay_summary = _pay_summary(payments)
+    # TCS Payment Detail unavailable and no saved copy: the payout rows still need each parcel's live state, so they
+    # get a light list from the tracking data (no money figures, kept out of "payments" so fees and totals stay clean)
+    pay_lite = [] if payments else [{
+        "cn": p["cn"], "order": p["order"] or "", "booked": p["booked"], "consignee": p.get("consignee") or "",
+        "city": p["city"], "weight": p.get("weight") or 0.5, "status": p["status"], "state": p["state"],
+        "pay_status": "Not listed yet", "pay_date": "", "cod": 0.0, "shipping": 0, "fuel": 0, "osa": 0.0, "stax": 0,
+        "gst_wh": 0.0, "it_wh": 0.0, "addl": 0.0, "net": 0.0} for p in parcels]
+    pay_summary = _pay_summary(payments or pay_lite)
     return {
         "from": d_from.isoformat(), "to": d_to.isoformat(), "env": used_env,
         "total": len(rows) - len(non_shopify), "delivery_charges": round(charges, 2), "amount_paid": round(paid, 2),
@@ -1352,6 +1359,7 @@ def _build_report_core(d_from: date, d_to: date, extra: str = "") -> dict:
         "parcels": parcels,
         "returns": [p for p in parcels if p["state"] in ("returned", "returning")],
         "payments": payments,
+        "pay_lite": pay_lite,
         "pay_summary": pay_summary,
         "statement": [],
         "unbooked": unbooked,
@@ -2568,7 +2576,7 @@ def payments_json():
     pays = [p for p in rep.get("payments", []) if _in_range(p["booked"], request.args)]
     _envio_fresh()
     return jsonify({"payments": pays, "totals": _pay_totals(pays),
-                    "summary": _pay_summary(pays)}), 200
+                    "summary": _pay_summary(pays or [p for p in rep.get("pay_lite", []) if _in_range(p["booked"], request.args)])}), 200
 
 
 @app.route("/returns.json", methods=["GET"])
