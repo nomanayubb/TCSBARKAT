@@ -547,7 +547,10 @@ def _urdu_fix_now(order: dict) -> None:
         payload, originals = {}, {}
         for key in ("shipping_address", "billing_address"):
             addr = order.get(key) or {}
-            changed = {f: urdu_fix.to_english(addr[f]) for f in _ADDR_FIELDS if urdu_fix.has_urdu(addr.get(f))}
+            urdu_part = {f: addr[f] for f in _ADDR_FIELDS if urdu_fix.has_urdu(addr.get(f))}
+            changed = urdu_fix.convert_fields(urdu_part) if urdu_part else {}
+            status["urdu_engine"] = urdu_fix.ai_state["engine"] + (
+                f" (ai problem: {urdu_fix.ai_state['last_error']})" if urdu_fix.ai_state["last_error"] else "")
             if changed:
                 originals[key] = " | ".join(f"{f}: {addr[f]}" for f in changed)
                 payload[key] = changed
