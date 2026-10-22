@@ -544,16 +544,18 @@ def _urdu_fix_now(order: dict) -> None:
     try:
         if "Original Urdu text:" in str(order.get("note") or ""):
             return  # already converted once
-        payload, originals = {}, []
+        payload, originals = {}, {}
         for key in ("shipping_address", "billing_address"):
             addr = order.get(key) or {}
             changed = {f: urdu_fix.to_english(addr[f]) for f in _ADDR_FIELDS if urdu_fix.has_urdu(addr.get(f))}
             if changed:
-                originals += [f"{f}: {addr[f]}" for f in changed]
+                originals[key] = " | ".join(f"{f}: {addr[f]}" for f in changed)
                 payload[key] = changed
         if not payload:
             return
-        note = (str(order.get("note") or "") + chr(10) + "Original Urdu text: " + " | ".join(originals)).strip()
+        parts = [("Shipping address", originals.get("shipping_address")), ("Billing address", originals.get("billing_address"))]
+        lines = [f"{label}: {text}" for label, text in parts if text]
+        note = (str(order.get("note") or "") + chr(10) + "Original Urdu text:" + chr(10) + chr(10).join(lines)).strip()
         body = {"order": dict(payload, id=order["id"], note=note)}  # name/address text + the note only
         r = requests.put(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
                          json=body, timeout=(10, 30))
