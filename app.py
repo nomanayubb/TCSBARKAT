@@ -513,7 +513,8 @@ def book_tcs_shipment(order: dict, env=None) -> dict:
 
 
 # ---------------------------------------------------------------- core processing
-URDU_AUTOFIX = os.environ.get("URDU_AUTOFIX", "true").strip().lower() != "false"
+# OFF by default (owner decision 2026-10-22). Switch on again with URDU_AUTOFIX=true in Render.
+URDU_AUTOFIX = os.environ.get("URDU_AUTOFIX", "false").strip().lower() == "true"
 _ADDR_FIELDS = ("first_name", "last_name", "company", "address1", "address2", "city", "province")
 
 
@@ -631,7 +632,8 @@ def _urdu_google_selftest() -> None:
 def _urdu_scan_loop():
     while True:
         try:
-            _urdu_google_selftest()
+            if URDU_AUTOFIX:
+                _urdu_google_selftest()
             _urdu_scan_once()
         except Exception as e:
             status["urdu_fix_error"] = f"scan: {type(e).__name__}"
