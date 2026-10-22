@@ -45,7 +45,7 @@ WORDS = {
     "چکوال": "Chakwal", "اٹک": "Attock", "منڈی بہاؤالدین": "Mandi Bahauddin", "نارووال": "Narowal",
     "شیخوپورہ": "Sheikhupura", "جھنگ": "Jhang", "ٹوبہ ٹیک سنگھ": "Toba Tek Singh", "بہاولنگر": "Bahawalnagar",
     "بورے والا": "Burewala", "بورے والہ": "Burewala", "ڈاک خانہ": "Dak Khana", "ڈاکخانہ": "Dak Khana",
-    "بنگلہ": "Bangla", "جوئیہ": "Joiya", "کے بی": "KB", "وہاڑی": "Vehari", "خانیوال": "Khanewal",
+    "بنگلہ": "Bangla", "جوئیہ": "Joiya", "جو یہ": "Joiya", "جویہ": "Joiya", "کے بی": "KB", "وہاڑی": "Vehari", "خانیوال": "Khanewal",
     "والا": "wala", "والی": "wali", "والے": "wale", "وزیرآباد": "Wazirabad", "وزیر آباد": "Wazirabad",
     "واہ کینٹ": "Wah Cantt", "واہ": "Wah", "وہاب": "Wahab", "وقاص": "Waqas", "وسیم": "Waseem",
     "وحید": "Waheed", "ولید": "Waleed", "وقار": "Waqar", "ملتان روڈ": "Multan Road",
