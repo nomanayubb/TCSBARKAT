@@ -611,9 +611,27 @@ def _urdu_scan_once() -> int:
     return found
 
 
+_google_selftest = {"at": 0.0}
+
+
+def _urdu_google_selftest() -> None:
+    """Every 10 minutes: romanise a fixed sample name through Google's free route and note on
+    /status whether it worked from this server. Touches no order."""
+    if time.time() - _google_selftest["at"] < 600:
+        return
+    _google_selftest["at"] = time.time()
+    urdu_fix._google["pause_until"] = 0.0
+    sample = "محمد علی بورے والا"
+    out = urdu_fix._google_roman({"sample": sample})
+    status["urdu_google_selftest"] = {
+        "at": _now(), "worked": bool(out), "result": (out or {}).get("sample"),
+        "problem": "" if out else urdu_fix.ai_state.get("last_error", "")}
+
+
 def _urdu_scan_loop():
     while True:
         try:
+            _urdu_google_selftest()
             _urdu_scan_once()
         except Exception as e:
             status["urdu_fix_error"] = f"scan: {type(e).__name__}"
