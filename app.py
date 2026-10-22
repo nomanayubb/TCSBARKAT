@@ -540,6 +540,10 @@ def maybe_fix_urdu(order: dict) -> None:
         body = {"order": dict(payload, id=order["id"], note=note, tags=", ".join(tags + ["urdu-converted"]))}
         r = requests.put(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
                          json=body, timeout=(10, 30))
+        if r.status_code == 403:  # the cached 24h token may predate a newly approved permission
+            _token_cache["expires_at"] = 0.0
+            r = requests.put(f"{SHOPIFY_BASE}/orders/{order['id']}.json", headers=shopify_headers(),
+                             json=body, timeout=(10, 30))
         if r.status_code >= 400:
             status["urdu_fix_error"] = f"{order.get('name')}: Shopify said {r.status_code} (needs write_orders permission?)"
             log.warning("Urdu fix not saved for %s: HTTP %s", order.get("name"), r.status_code)
@@ -2752,6 +2756,8 @@ _scopes_cache = {"at": 0.0, "scopes": []}
 
 def _granted_scopes() -> list:
     if time.time() - _scopes_cache["at"] > 300:
+        if "write_orders" not in _scopes_cache["scopes"]:
+            _token_cache["expires_at"] = 0.0  # pick up newly approved permissions with a fresh token
         try:
             r = requests.get(f"https://{SHOPIFY_STORE_DOMAIN}/admin/oauth/access_scopes.json",
                              headers=shopify_headers(), timeout=(10, 20))
