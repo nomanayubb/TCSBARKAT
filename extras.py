@@ -869,6 +869,55 @@ def board_data():
     return [{"title": t, "color": c, "total": len(items), "cards": [card(p) for p in items[:60]]} for t, c, items in cols]
 
 
+@tool("shopify_webhooks", "Tools", "Shopify order webhook (old connection) health")
+def shopify_webhooks():
+    """Read-only: is the Shopify orders/create webhook registered for this service, and has it fired?"""
+    rows = []
+    try:
+        r = A.requests.get(f"{A.SHOPIFY_BASE}/webhooks.json", headers=A.shopify_headers(), timeout=(10, 20))
+        r.raise_for_status()
+        ours = f"{A.APP_BASE_URL}/webhooks/orders-create" if A.APP_BASE_URL else ""
+        for w in r.json().get("webhooks", []):
+            rows.append([w.get("topic"), w.get("address"), "this service" if w.get("address") == ours else "other", w.get("created_at", "")[:10]])
+        state = "registered" if any(x[2] == "this service" for x in rows) else "NOT registered"
+    except Exception as e:
+        return TEXT(f"Could not read Shopify webhooks: {type(e).__name__}")
+    rows.append(["last order webhook received", A.status.get("last_webhook_at") or "none since the service started", "", ""])
+    rows.append(["backup check of orders", A.status.get("last_catch_up_at") or "", "every 15 minutes finds any order the webhook missed", ""])
+    return T(["Topic", "Address", "Belongs to", "Created"], rows,
+             note=f"orders/create webhook: {state}. Shopify pushes new orders at once; the catch-up pass is the backup.")
+
+
+@tool("redundancy", "Tools", "Which path is carrying the data? (webhook and backup)")
+def redundancy():
+    import time as _t
+    now = _t.time()
+    last_ev = events()[-1]["at"] if events() else ""
+    def ago(t):
+        try:
+            return int(now - datetime.strptime(t, "%Y-%m-%d %H:%M:%S UTC").replace(tzinfo=timezone.utc).timestamp())
+        except (ValueError, TypeError):
+            return None
+    ev_age = ago(last_ev)
+    hook_ok = ev_age is not None and ev_age < 86400
+    poll_ok = bool(A._live.get("at")) and now - A._live["at"] < 180 and not A._live.get("error")
+    sh_hook = A.status.get("last_webhook_at")
+    catch_ok = bool(A.status.get("last_catch_up_at")) and A.status.get("stage") != "failed"
+
+    def cover(primary, backup):
+        return "both working" if primary and backup else "backup only: the primary is silent" if backup else "primary only: the backup failed" if primary else "NOTHING working: check the system tool"
+    rows = [
+        ["Parcel updates", "Envio webhook: " + (f"last event {ev_age}s ago" if ev_age is not None else "no event yet"),
+         "TCS tracking, re-read every 15 s: " + ("ok" if poll_ok else "FAILED"), cover(hook_ok, poll_ok)],
+        ["New Shopify orders", "Shopify webhook: " + (sh_hook or "none since the service started"),
+         "Catch-up pass every 15 min: " + ("ok" if catch_ok else "FAILED"), cover(bool(sh_hook), catch_ok)],
+        ["Weekly statement and invoices", "no webhook exists", "Envio portal read: " + ("ok" if (A._envio_data.get("at") and not A._envio_data.get("error")) else "FAILED"),
+         "portal read only" if (A._envio_data.get("at") and not A._envio_data.get("error")) else "NOTHING working"],
+    ]
+    return T(["What", "Primary (pushed at once)", "Backup (checks regularly)", "Covered by"], rows,
+             note="A silent webhook can be normal when nothing changed. The backup always keeps the report up to date.")
+
+
 # ================================================================== routes
 def _ok():
     if not A.ORDERS_PAGE_KEY or not hmac.compare_digest(request.args.get("key", ""), A.ORDERS_PAGE_KEY):
