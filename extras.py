@@ -674,15 +674,24 @@ CH = {"log": [], "seq": int(_time.time() * 1000), "snap": None, "seen": set(), "
 _ch_lock = threading.Lock()
 
 
+def _safe(fn):
+    """One broken part of the data must not silence the whole bell: that part is skipped and logged, the rest still works."""
+    try:
+        return fn()
+    except Exception:
+        A.log.exception("Change snapshot: one part skipped")
+        return {}
+
+
 def _snapshot():
     r = rep()
     return {
-        "parcels": {str(p["cn"]): {k: p.get(k) for k in ("order", "status", "last_event", "last_time", "city", "delivered_on",
-                                                          "pay_status", "pay_date", "cod", "product")} for p in r.get("parcels", [])},
-        "lines": {(l["_week"], str(l.get("ConsignmentNumber"))): {k: l.get(k) for k in (
-            "CustomerReference", "DeliveryStatus", "CODAmount", "ShippingChg", "GSTWH", "ITWH", "BalPayable")} for l in lines()},
-        "ledger": {v["BILLING_WEEK"]: {k: v.get(k) for k in ("AMOUNTPAYABLE", "AMOUNTPAID", "INVOICEDATE", "PAYMENTDATE")} for v in ledger()},
-        "unbooked": {u["order"]: u for u in r.get("unbooked", [])},
+        "parcels": _safe(lambda: {str(p["cn"]): {k: p.get(k) for k in ("order", "status", "last_event", "last_time", "city", "delivered_on",
+                                                                    "pay_status", "pay_date", "cod", "product")} for p in r.get("parcels", [])}),
+        "lines": _safe(lambda: {(l.get("_week") or "", str(l.get("ConsignmentNumber"))): {k: l.get(k) for k in (
+            "CustomerReference", "DeliveryStatus", "CODAmount", "ShippingChg", "GSTWH", "ITWH", "BalPayable")} for l in lines()}),
+        "ledger": _safe(lambda: {v["BILLING_WEEK"]: {k: v.get(k) for k in ("AMOUNTPAYABLE", "AMOUNTPAID", "INVOICEDATE", "PAYMENTDATE")} for v in ledger()}),
+        "unbooked": _safe(lambda: {u["order"]: u for u in r.get("unbooked", [])}),
     }
 
 
@@ -796,7 +805,8 @@ def _watch():
                         CH["filled"] = True
                         _backfill(snap)
                     CH["snap"], CH["marks"] = snap, marks
-        except Exception:
+        except Exception as e:
+            CH["err"] = f"{type(e).__name__}: {str(e)[:120]}"
             A.log.exception("Change watcher failed")
         _time.sleep(3)
 
@@ -1039,7 +1049,8 @@ def register(flask_app, app_module):
             since = int(request.args.get("since", "0"))
         except ValueError:
             since = 0
-        return jsonify({"changes": [c for c in CH["log"] if c["id"] > since][-500:], "max": CH["seq"]}), 200
+        return jsonify({"changes": [c for c in CH["log"] if c["id"] > since][-500:], "max": CH["seq"],
+                        "watch": {"has_snapshot": CH["snap"] is not None, "filled": bool(CH.get("filled")), "error": CH.get("err", "")}}), 200
 
     @flask_app.route("/tools")
     def tools_page():
