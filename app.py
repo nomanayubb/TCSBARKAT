@@ -2307,10 +2307,13 @@ def _envio_refresh():
         if not isinstance(ledger, list):
             raise RuntimeError("unexpected ledger answer")
         lines = []
-        for w in ((_envio_periods(acct).get("PaymentPeriod")) or []):
-            for r in _envio_rows(acct, w["ID"]):
+        weeks = [w["ID"] for w in ((_envio_periods(acct).get("PaymentPeriod")) or [])]
+        # the invoice list can show a week before the portal's period drop-down lists it: ask for that week's lines anyway
+        weeks += [v["BILLING_WEEK"] for v in ledger if v.get("BILLING_WEEK") and v["BILLING_WEEK"] not in weeks]
+        for w in weeks:
+            for r in _envio_rows(acct, w):
                 r = dict(r)
-                r["_week"] = w["ID"]
+                r["_week"] = w
                 lines.append(r)
         prev = {v["BILLING_WEEK"]: v for v in (_envio_data.get("ledger") or [])}
         _envio_data.update(ledger=ledger, lines=lines, at=time.time(), error="")
