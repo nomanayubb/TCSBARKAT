@@ -893,6 +893,7 @@ def nav_html(active, key):
     for k, label in items:
         url = f"/board?key={key}" if k == "board" else f"/p/{k}?key={key}"
         h += f"<a href='{url}'{' class=on' if k == active else ''}>{label}</a>"
+    h += f"<a href='/profit?key={key}'{' class=on' if active == 'profit' else ''}>Profit</a>"
     return h + f"<a href='/tools?key={key}'{' class=on' if active == 'tools' else ''}>All tools</a></div>"
 
 
@@ -1037,6 +1038,107 @@ nav();var last='';try{last=localStorage.getItem('tool')||''}catch(e){} if(last&&
 </script>"""
 
 
+def profit_data():
+    """One row per parcel with the facts the profit table needs. Money comes from TCS (ledger COD, billed charges); a parcel TCS
+    has not listed yet uses the usual billed charges and the Shopify order total, and is flagged as an estimate."""
+    r = rep()
+    pays = {str(p["cn"]): p for p in r.get("payments", [])}
+    out, titles = [], []
+    for p in r.get("parcels", []):
+        pay = pays.get(str(p["cn"]))
+        order = p.get("order") or ""
+        its = [[t, q] for t, q in (A._order_items.get(order) or [])]
+        state = p.get("state") or ""
+        delivered = state == "delivered"
+        listed = bool(pay) and pay.get("pay_status") != "Not listed yet"
+        revenue = 0.0
+        if delivered:
+            cod = float((pay or {}).get("cod") or 0) if listed else 0.0
+            revenue = cod if cod > 0 else float(A._order_totals.get(order) or 0)
+        charges = float(pay["shipping"] + pay["fuel"] + pay["stax"] + pay.get("osa", 0)) if pay else 0.0
+        withheld = float(pay["gst_wh"] + pay["it_wh"] + pay.get("addl", 0)) if (pay and delivered and listed) else 0.0
+        for t, _ in its:
+            if t not in titles:
+                titles.append(t)
+        out.append({"order": order, "cn": str(p["cn"]), "booked": p.get("booked") or "", "status": p.get("status") or "",
+                    "state": state, "delivered": delivered,
+                    "returned": state in ("returned", "returning", "rejected"),
+                    "revenue": round(revenue, 2), "charges": round(charges, 2), "withheld": round(withheld, 2),
+                    "estimate": (not listed) or (delivered and not float((pay or {}).get("cod") or 0) > 0),
+                    "items": its})
+    return {"parcels": out, "products": titles, "from": r.get("from"), "to": r.get("to")}
+
+
+PROFIT_JS = r"""<script>
+(function(){
+var KEY=new URLSearchParams(location.search).get('key')||'', CFGKEY='profit_cfg_v1';
+var cfg={products:{},wh:true}, data=null, open={};
+try{var s=localStorage.getItem(CFGKEY); if(s) cfg=Object.assign(cfg,JSON.parse(s))}catch(e){}
+function save(){try{localStorage.setItem(CFGKEY,JSON.stringify(cfg))}catch(e){}}
+function esc(s){return String(s==null?'':s).replace(/[&<>"]/g,function(c){return {'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[c]})}
+function n(x){return Math.round(Number(x)||0).toLocaleString()}
+function f2(x){return (Number(x)||0).toLocaleString(undefined,{minimumFractionDigits:2,maximumFractionDigits:2})}
+function pc(t){var p=cfg.products[t]||{}; return {cost:Number(p.cost)||0, orders:Number(p.orders)||0, rupees:Number(p.rupees)||0}}
+function calc(p){
+  var cost=0, ad=0, seen={};
+  p.items.forEach(function(it){var t=it[0], c=pc(t);
+    if(p.delivered) cost+=c.cost*(Number(it[1])||1);
+    if(!seen[t]){seen[t]=1; if(c.orders>0) ad+=c.rupees/c.orders}});
+  var wh=cfg.wh?p.withheld:0;
+  return {cost:cost, ad:ad, net:p.revenue-cost-p.charges-wh-ad, wh:wh};
+}
+function build(){
+  if(!data) return;
+  var days={}, tot={orders:0,del:0,ret:0,mov:0,rev:0,cost:0,chg:0,wh:0,ad:0,net:0,est:0};
+  data.parcels.forEach(function(p){
+    var d=days[p.booked]||(days[p.booked]={date:p.booked,orders:0,del:0,ret:0,mov:0,rev:0,cost:0,chg:0,wh:0,ad:0,net:0,est:0,rows:[]});
+    var c=calc(p); p._c=c;
+    [d,tot].forEach(function(x){x.orders++; if(p.delivered)x.del++; else if(p.returned)x.ret++; else x.mov++;
+      x.rev+=p.revenue; x.cost+=c.cost; x.chg+=p.charges; x.wh+=c.wh; x.ad+=c.ad; x.net+=c.net; if(p.estimate)x.est++});
+    d.rows.push(p)});
+  var list=Object.keys(days).sort().reverse().map(function(k){return days[k]});
+  var h='<div class="box"><h3>Product settings (kept in this browser)</h3><table><tr><th>Product</th><th>Cost per piece (Rs)</th><th>Ad spend: orders</th><th>= rupees</th><th>Ad cost per order</th></tr>';
+  data.products.forEach(function(t,i){var c=pc(t);
+    h+='<tr><td>'+esc(t)+'</td><td><input data-i="'+i+'" data-f="cost" type="number" min="0" step="any" value="'+(c.cost||'')+'" style="width:90px"></td>'+
+       '<td><input data-i="'+i+'" data-f="orders" type="number" min="0" step="any" value="'+(c.orders||'')+'" style="width:70px"></td>'+
+       '<td><input data-i="'+i+'" data-f="rupees" type="number" min="0" step="any" value="'+(c.rupees||'')+'" style="width:90px"></td>'+
+       '<td>'+(c.orders>0?f2(c.rupees/c.orders):'-')+'</td></tr>'});
+  h+='</table><label><input type="checkbox" id="whc"'+(cfg.wh?' checked':'')+'> count the GST / income tax TCS withholds as a cost</label> '+
+     '<button id="bk">Download backup</button> <button id="rs">Restore backup</button><input type="file" id="rsf" accept=".json" hidden>'+
+     '<p style="color:#777;font-size:13px">Example: Ameer Baap Gareeb Baap, ad spend 3 orders = 1000 rupees, then every order of that product costs 333.33 in ads, returned or delivered. Product cost counts only on delivered parcels (a returned parcel comes back to you).</p></div>';
+  var cl=function(v){return v>=0?'#12803c':'#b3261e'};
+  h+='<div class="cards" style="margin:8px 0"><div class="cd">Parcels booked<b>'+tot.orders+'</b></div><div class="cd">Delivered<b>'+tot.del+'</b></div>'+
+     '<div class="cd">Returned / refused<b>'+tot.ret+'</b></div><div class="cd">Still moving<b>'+tot.mov+'</b></div>'+
+     '<div class="cd">Sales (COD delivered)<b>'+n(tot.rev)+'</b></div><div class="cd">TCS charges<b>'+n(tot.chg)+'</b></div>'+
+     '<div class="cd">Ad cost<b>'+n(tot.ad)+'</b></div><div class="cd">Net profit until now<b style="color:'+cl(tot.net)+'">'+n(tot.net)+'</b></div></div>';
+  h+='<table id="pt"><tr><th>Booked on</th><th>Orders</th><th>Delivered</th><th>Returned</th><th>Moving</th><th>Sales</th><th>Product cost</th><th>TCS charges</th><th>Tax withheld</th><th>Ad cost</th><th>Net profit</th></tr>';
+  list.forEach(function(d){
+    h+='<tr class="dr" data-d="'+esc(d.date)+'" style="cursor:pointer"><td><b>'+esc(d.date)+'</b> '+(open[d.date]?'&#9650;':'&#9660;')+'</td><td>'+d.orders+'</td><td>'+d.del+'</td><td>'+d.ret+'</td><td>'+d.mov+'</td><td>'+n(d.rev)+'</td><td>'+n(d.cost)+'</td><td>'+n(d.chg)+'</td><td>'+n(d.wh)+'</td><td>'+n(d.ad)+'</td><td><b style="color:'+cl(d.net)+'">'+n(d.net)+'</b></td></tr>';
+    if(open[d.date]){
+      d.rows.slice().sort(function(a,b){return a.order<b.order?-1:1}).forEach(function(p){var c=p._c;
+        h+='<tr style="background:rgba(128,128,128,.08)"><td>&nbsp;&nbsp;<b>'+esc(p.order||p.cn)+'</b></td><td colspan="3">'+esc(p.status)+(p.estimate?' (estimate)':'')+'</td><td>'+esc(p.items.map(function(i){return i[0]+' x'+i[1]}).join(', '))+'</td><td>'+n(p.revenue)+'</td><td>'+n(c.cost)+'</td><td>'+n(p.charges)+'</td><td>'+n(c.wh)+'</td><td>'+n(c.ad)+'</td><td style="color:'+cl(c.net)+'">'+n(c.net)+'</td></tr>'})}});
+  h+='<tr style="font-weight:bold"><td>All dates</td><td>'+tot.orders+'</td><td>'+tot.del+'</td><td>'+tot.ret+'</td><td>'+tot.mov+'</td><td>'+n(tot.rev)+'</td><td>'+n(tot.cost)+'</td><td>'+n(tot.chg)+'</td><td>'+n(tot.wh)+'</td><td>'+n(tot.ad)+'</td><td style="color:'+cl(tot.net)+'">'+n(tot.net)+'</td></tr></table>'+
+     '<p style="color:#777;font-size:13px">Net profit = sales of delivered parcels (the COD TCS recorded) - product cost - TCS charges (shipping, fuel, sales tax on every booked parcel, returned ones too) - tax withheld - ad cost. Parcels still moving have no sales yet, so their charges and ad cost already count while their sales do not. '+
+     (tot.est?tot.est+' parcel(s) use an estimate: TCS has not listed them yet, so the usual TCS charges and the Shopify order total are used. ':'')+'</p>';
+  document.getElementById('pbody2').innerHTML=h;
+}
+document.addEventListener('click',function(e){var tr=e.target.closest&&e.target.closest('tr.dr'); if(tr){var d=tr.getAttribute('data-d'); open[d]=!open[d]; build()}
+  if(e.target.id==='bk'){var b=new Blob([JSON.stringify(cfg)],{type:'application/json'}),a=document.createElement('a');a.href=URL.createObjectURL(b);a.download='profit-settings.json';a.click()}
+  if(e.target.id==='rs'){document.getElementById('rsf').click()}});
+document.addEventListener('change',function(e){var t=e.target;
+  if(t.id==='whc'){cfg.wh=t.checked; save(); build(); return}
+  if(t.id==='rsf'&&t.files[0]){var r=new FileReader();r.onload=function(){try{cfg=Object.assign({products:{},wh:true},JSON.parse(r.result)); save(); build()}catch(x){alert('That file is not a settings backup')}};r.readAsText(t.files[0]); return}
+  if(t.getAttribute&&t.getAttribute('data-f')){var title=data.products[Number(t.getAttribute('data-i'))], f=t.getAttribute('data-f');
+    var p=cfg.products[title]||(cfg.products[title]={}); p[f]=t.value===''?'':Number(t.value); save(); build()}});
+function load(){fetch('/profit.json?key='+encodeURIComponent(KEY),{cache:'no-store'}).then(function(r){return r.json()}).then(function(d){
+  if(d.loading){document.getElementById('pbody2').textContent='Loading...';return}
+  var typing=document.activeElement&&document.activeElement.tagName==='INPUT';
+  data=d; if(!typing) build()}).catch(function(){})}
+load(); setInterval(load,30000);
+})();
+</script>"""
+
+
 def register(flask_app, app_module):
     global A
     A = app_module
@@ -1097,6 +1199,22 @@ def register(flask_app, app_module):
                 "<title>Board - TCS</title>" + SHELL_CSS + nav_html("board", key)
                 + "<div id='pbody'><h2>Parcel board</h2><div id='cols' style='display:flex;gap:10px;flex-wrap:wrap;align-items:flex-start'>Loading...</div></div>"
                 + BOARD_JS + NOTIFY_JS), 200
+
+    @flask_app.route("/profit")
+    def profit_page():
+        _ok()
+        key = request.args.get("key", "")
+        return ("<!doctype html><meta charset='utf-8'><meta name='viewport' content='width=device-width,initial-scale=1'>"
+                "<title>Profit - TCS</title>" + SHELL_CSS + nav_html("profit", key)
+                + "<div id='pbody'><h2>Net profit by booking date</h2><div id='pbody2'>Loading...</div></div>"
+                + PROFIT_JS + NOTIFY_JS), 200
+
+    @flask_app.route("/profit.json")
+    def profit_json():
+        _ok()
+        if not A._live.get("rep"):
+            return jsonify({"loading": True}), 200
+        return jsonify(profit_data()), 200
 
     @flask_app.route("/board.json")
     def board_json():
